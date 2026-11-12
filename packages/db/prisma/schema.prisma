@@ -1,0 +1,258 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  MEMBER
+  ADMIN
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships        Membership[]
+  assignments        IssueMapping[]
+  comments           Comment[]
+  planGenerationJobs PlanGenerationJob[]
+  approvalRecords    ApprovalRecord[]
+}
+
+model Org {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships    Membership[]
+  boards         Board[]
+  pendingInvites PendingInvite[]
+}
+
+model Membership {
+  id       String  @id @default(cuid())
+  role     Role    @default(MEMBER)
+  accepted Boolean @default(false)
+  userId   String
+  orgId    String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Org  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+}
+
+model PendingInvite {
+  id        String   @id @default(cuid())
+  email     String
+  role      Role     @default(MEMBER)
+  orgId     String
+  createdAt DateTime @default(now())
+
+  org Org @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([email, orgId])
+  @@index([orgId])
+}
+
+model Board {
+  id          String   @id @default(cuid())
+  title       String
+  description String? // shown on the BoardsList dashboard card; null renders no description line, never placeholder text
+  orgId       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  org      Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  sections Section[]
+  issues   Issue[]
+
+  @@index([orgId])
+}
+
+model Section {
+  id       String @id @default(cuid())
+  title    String
+  position Int
+  boardId  String
+
+  board  Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  issues Issue[]
+
+  @@index([boardId])
+}
+
+model Issue {
+  id              String   @id @default(cuid())
+  title           String
+  description     String?
+  position        Int
+  githubNodeId    String?  @unique // GitHub's permanent id for the issue; null for issues created in-app
+  plan            String? // the current AI-generated implementation plan, as markdown
+  intendedFiles   String[] // files/modules the plan declares it will touch
+  claudeSessionId String? // lets chat `resume` this same session instead of starting fresh
+  // Claude's own suggestion, made alongside plan generation, that this
+  // ticket depends on another one — { blockerId, assumedContract }.
+  // Never auto-committed: a real TicketDependency row only ever gets
+  // created through the existing POST /issues/:id/dependencies route,
+  // same as a manually-declared one. Cleared (set null) the moment a
+  // human confirms or dismisses it — there's currently no path that
+  // would re-trigger a second suggestion for the same ticket, since a
+  // plan is only ever generated once per ticket in the current UI.
+  suggestedDependency Json?
+  status          TicketStatus @default(OPEN)
+  boardId         String
+  sectionId       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  board     Board               @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  section   Section             @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  assignees    IssueMapping[]
+  comments     Comment[]
+  planJobs     PlanGenerationJob[]
+  planMessages PlanMessage[]
+  // Self-relation, two directions: this ticket waiting on others, and
+  // others waiting on this ticket. Prisma needs both named explicitly.
+  dependsOn    TicketDependency[] @relation("DependentTicket")
+  dependents   TicketDependency[] @relation("BlockerTicket")
+  approvals    ApprovalRecord[]
+
+  @@index([boardId])
+  @@index([sectionId])
+}
+
+// One row per "A depends on B" edge. assumedContract is captured when the
+// edge is declared (phase 3 step 4); actualContract + mismatchFlag get
+// filled in once the blocker resolves (phase 3 step 6).
+model TicketDependency {
+  id              String  @id @default(cuid())
+  blockedId       String // the ticket that is waiting
+  blockerId       String // the ticket it's waiting on
+  assumedContract String?
+  actualContract  String?
+  mismatchFlag    Boolean @default(false)
+
+  blocked Issue @relation("DependentTicket", fields: [blockedId], references: [id], onDelete: Cascade)
+  blocker Issue @relation("BlockerTicket", fields: [blockerId], references: [id], onDelete: Cascade)
+
+  @@unique([blockedId, blockerId])
+}
+
+// One row per chat turn, scoped to a ticket's planning conversation.
+// "role" distinguishes the human's messages from Claude's replies, same
+// convention used by every chat-style LLM API.
+model PlanMessage {
+  id        String   @id @default(cuid())
+  issueId   String
+  role      String // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now())
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+}
+
+// Tamper-evident approval log: each record's hash includes the previous
+// record's hash, so editing a past approval breaks the chain, not just
+// the one row — detectable by walking it, not merely trusted by
+// construction. Chained per-board (not per-ticket) — simpler, and still
+// makes tampering with ANY past approval on the board detectable.
+model ApprovalRecord {
+  id           String   @id @default(cuid())
+  issueId      String
+  approvedById String
+  contentHash  String // sha256 of the exact plan content being approved
+  previousHash String? // the board's prior ApprovalRecord's contentHash
+  createdAt    DateTime @default(now())
+
+  issue      Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  approvedBy User  @relation(fields: [approvedById], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+}
+
+// Not @unique on issueId: a ticket can have many jobs over its lifetime
+// (one per "Generate plan" click, one per chat message) — the rule is only
+// "no more than one QUEUED/RUNNING job per ticket at a time", which is
+// enforced in application code before creating a new row, not by a DB
+// constraint that would block a second job from ever existing.
+model PlanGenerationJob {
+  id            String    @id @default(cuid())
+  issueId       String
+  requestedById String
+  status        JobStatus @default(QUEUED)
+  attempts      Int       @default(0)
+  error         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  issue       Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation(fields: [requestedById], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// OPEN: no plan yet. PLANNING: a plan exists. BLOCKED: waiting on an
+// unresolved TicketDependency. READY: plan approved, no open blockers.
+// DONE: moved into the board's "Completed" section (see phase 3 step 5
+// of remaining-implementation-plan.md for exactly where this gets set).
+enum TicketStatus {
+  OPEN
+  PLANNING
+  BLOCKED
+  READY
+  DONE
+}
+
+model IssueMapping {
+  id      String @id @default(cuid())
+  userId  String
+  issueId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId])
+  @@index([issueId])
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  body      String
+  issueId   String
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  issue  Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author User  @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+  @@index([authorId])
+}

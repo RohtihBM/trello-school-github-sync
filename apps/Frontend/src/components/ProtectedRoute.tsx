@@ -1,0 +1,9 @@
+import { Navigate, Outlet } from "react-router-dom";
+import { getToken } from "../lib/api";
+
+export function ProtectedRoute() {
+  if (!getToken()) {
+    return <Navigate to="/signin" replace />;
+  }
+  return <Outlet />;
+}

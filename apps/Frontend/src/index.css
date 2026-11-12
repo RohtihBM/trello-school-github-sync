@@ -1,0 +1,131 @@
+@import "tailwindcss";
+
+/* Self-hosted, explicit @font-face — no runtime request to Google, no
+   layout shift from a late-loading web font. Deliberately NOT importing
+   @fontsource's own CSS here: its relative url() paths into node_modules
+   didn't survive this monorepo's hoisted node_modules through Vite's
+   asset pipeline (confirmed by inspecting the actual `dist` build output
+   — zero font files were emitted, meaning production would have silently
+   fallen back to the system font with no visible error). The .woff2
+   files themselves are copied into public/fonts/ instead, referenced
+   here by an absolute path Vite never needs to resolve or rewrite.
+   Latin subset only — this app has no i18n beyond English. */
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-600-normal.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Sans";
+  src: url("/fonts/geist-sans-latin-700-normal.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/geist-mono-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Geist Mono";
+  src: url("/fonts/geist-mono-latin-500-normal.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme {
+  --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* The ONLY grays used anywhere in this app from here on — every
+     component reads these, never Tailwind's default slate/gray/zinc
+     directly, so the whole UI stays one consistent neutral scale
+     instead of three different grays picked ad hoc per component (the
+     actual state of the app before this phase). */
+  --color-neutral-50: oklch(98.5% 0 0);
+  --color-neutral-100: oklch(97% 0 0);
+  --color-neutral-200: oklch(93% 0 0);
+  --color-neutral-300: oklch(87% 0 0);
+  --color-neutral-400: oklch(70% 0 0);
+  --color-neutral-500: oklch(55% 0 0);
+  --color-neutral-600: oklch(44% 0 0);
+  --color-neutral-700: oklch(35% 0 0);
+  --color-neutral-800: oklch(24% 0 0);
+  --color-neutral-900: oklch(16% 0 0);
+  --color-neutral-950: oklch(10% 0 0);
+
+  /* One accent, used sparingly (plan rule #1) — primary actions and
+     active/focus states only. Deliberately not blue — flat indigo
+     reads as a real product's chosen brand color, not the default
+     "AI SaaS gradient" blue-to-purple. No gradients anywhere. */
+  --color-accent-50: oklch(96% 0.025 275);
+  --color-accent-100: oklch(91% 0.05 275);
+  --color-accent-200: oklch(84% 0.08 275);
+  --color-accent-500: oklch(55% 0.18 275);
+  --color-accent-600: oklch(48% 0.19 275);
+  --color-accent-700: oklch(40% 0.18 275);
+
+  /* Status/semantic colors, kept deliberately distinct from the accent
+     above — a ticket's status should never visually compete with "this
+     is a clickable primary action." Used by Badge and status-driven UI
+     (dependency waiting/resolved/mismatch, file-overlap warnings,
+     destructive confirmations). */
+  --color-success-50: oklch(96% 0.03 155);
+  --color-success-100: oklch(93% 0.06 155);
+  --color-success-600: oklch(52% 0.13 155);
+  --color-success-700: oklch(43% 0.12 155);
+  --color-warning-50: oklch(97% 0.035 85);
+  --color-warning-100: oklch(94% 0.07 85);
+  --color-warning-700: oklch(50% 0.12 85);
+  --color-danger-50: oklch(96% 0.03 25);
+  --color-danger-100: oklch(93% 0.06 25);
+  --color-danger-600: oklch(55% 0.19 25);
+  --color-danger-700: oklch(46% 0.18 25);
+
+  /* Semantic surface tokens. Primitives read THESE, not a raw
+     neutral-N/accent-N — a future re-theme (e.g. dark mode) only ever
+     has to touch this block, never any component file. */
+  --color-background: var(--color-neutral-50);
+  --color-surface: oklch(100% 0 0);
+  --color-border: var(--color-neutral-200);
+  --color-foreground: var(--color-neutral-900);
+  --color-muted-foreground: var(--color-neutral-500);
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* A real focus-visible ring everywhere, keyboard-only — the current app
+   has zero intentional focus styling (relying on whatever the browser
+   default happens to be, frequently suppressed by a CSS reset). */
+:focus-visible {
+  outline: 2px solid var(--color-accent-500);
+  outline-offset: 2px;
+}
