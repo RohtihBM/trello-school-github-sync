@@ -45,3 +45,4 @@ yarn-error.log*
 # Editor/tooling artifacts, not source
 .claude/
 .history/
+package-lock.json
