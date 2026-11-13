@@ -1,0 +1,1 @@
+-- Empty on purpose — see 20261111181342_board_description/migration.sql.

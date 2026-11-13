@@ -1,25 +1,21 @@
 import { useState, type FormEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { AlertTriangle, Bot, CheckCircle2, Loader2, Sparkles, X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import type { BoardMember, Issue, OverlapInfo } from "../lib/api";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
-import { Badge, STATUS_BADGE_VARIANT } from "./ui/badge";
+import { Badge } from "./ui/badge";
 import { Avatar, AvatarFallback, initialFromEmail } from "./ui/avatar";
 import { cn } from "../lib/cn";
+import { MARKDOWN_COMPONENTS } from "../lib/markdownComponents";
 
 interface TicketDetailsPaneProps {
   issue: Issue;
   allIssues: Issue[];
   boardMembers: BoardMember[];
-  pending: boolean;
-  errorMessage?: string;
   overlaps: OverlapInfo[];
-  onGeneratePlan: () => void;
   onAddDependency: (blockerId: string, assumedContract: string) => void;
-  onApprove: () => void;
-  onDismissSuggestion: () => void;
   onAssign: (userId: string) => void;
   onUnassign: (userId: string) => void;
 }
@@ -58,13 +54,8 @@ export function TicketDetailsPane({
   issue,
   allIssues,
   boardMembers,
-  pending,
-  errorMessage,
   overlaps,
-  onGeneratePlan,
   onAddDependency,
-  onApprove,
-  onDismissSuggestion,
   onAssign,
   onUnassign,
 }: TicketDetailsPaneProps) {
@@ -82,11 +73,6 @@ export function TicketDetailsPane({
     setAddingAssigneeId("");
   }
 
-  const suggestion = issue.suggestedDependency;
-  const suggestedBlocker = suggestion
-    ? allIssues.find((i) => i.id === suggestion.blockerId)
-    : undefined;
-
   const candidateBlockers = allIssues.filter(
     (i) => i.id !== issue.id && i.boardId === issue.boardId,
   );
@@ -101,6 +87,24 @@ export function TicketDetailsPane({
 
   return (
     <div className="space-y-3 p-4">
+      {/* Its own proper section, not crammed into the panel's fixed
+          header strip (where it used to live) — a real description with
+          an "Acceptance criteria" list needs room to grow and markdown
+          rendering, not a shrinking sliver of a title bar. Rendered the
+          same way the plan is, since both are the same kind of
+          markdown-ish free text.
+
+          Capped height with its own overflow-y-auto — a long description
+          scrolls internally instead of pushing Assignees/Generate
+          plan/Depends on further down the shared outer scroll, which
+          would otherwise make the rest of the panel feel like it's
+          buried under the description every time it's long. */}
+      {issue.description && (
+        <div className="max-h-72 overflow-y-auto rounded-md border border-border bg-surface p-3 text-xs">
+          <ReactMarkdown components={MARKDOWN_COMPONENTS}>{issue.description}</ReactMarkdown>
+        </div>
+      )}
+
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-foreground">Assignees</p>
 
@@ -157,8 +161,13 @@ export function TicketDetailsPane({
         )}
       </div>
 
-      {errorMessage && <p className="text-xs text-danger-600">{errorMessage}</p>}
-
+      {/* The plan itself, the pre-plan dependency-suggestion banner, and
+          the Approve action all moved into ChatPane — the plan is now
+          shown as the first message in that same conversation thread,
+          with Approve directly under it, rather than living in a
+          separate card here. This pane stays: description, assignees,
+          file-overlap warnings, and the manual "Depends on" declaration,
+          none of which are part of the chat conversation itself. */}
       {overlaps.length > 0 && (
         <div className="space-y-1 rounded-md border border-warning-700/20 bg-warning-50 p-2 text-xs">
           <div className="flex items-center gap-1.5 font-medium text-warning-700">
@@ -171,123 +180,6 @@ export function TicketDetailsPane({
             </p>
           ))}
         </div>
-      )}
-
-      {issue.plan ? (
-        <>
-          <div className="prose-plan rounded-md border border-border bg-surface p-3 text-xs">
-            <ReactMarkdown
-              components={{
-                // Headings get real visual weight — a border-left accent
-                // plus a size/weight jump from body text, not just a
-                // slightly-bolder paragraph. This is the concrete fix for
-                // "scannable": without it, a plan with several sections
-                // reads as one undifferentiated block of text, and
-                // finding "the testing section" means reading everything.
-                h1: (p) => (
-                  <p
-                    className="mb-1.5 mt-3 border-l-2 border-accent-400 pl-2 text-sm font-semibold text-foreground first:mt-0"
-                    {...p}
-                  />
-                ),
-                h2: (p) => (
-                  <p
-                    className="mb-1.5 mt-3 border-l-2 border-accent-400 pl-2 text-sm font-semibold text-foreground first:mt-0"
-                    {...p}
-                  />
-                ),
-                h3: (p) => (
-                  <p className="mb-1 mt-2.5 text-xs font-semibold text-foreground first:mt-0" {...p} />
-                ),
-                p: (p) => <p className="mb-1.5 leading-relaxed last:mb-0" {...p} />,
-                ul: (p) => <ul className="mb-1.5 list-disc space-y-1 pl-4 last:mb-0" {...p} />,
-                ol: (p) => <ol className="mb-1.5 list-decimal space-y-1 pl-4 last:mb-0" {...p} />,
-                li: (p) => <li {...p} />,
-                strong: (p) => <strong className="font-semibold text-foreground" {...p} />,
-                code: (p) => (
-                  <code className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.7rem]" {...p} />
-                ),
-                pre: (p) => (
-                  <pre
-                    tabIndex={0}
-                    className="mb-1.5 overflow-x-auto rounded bg-neutral-900 p-2 font-mono text-[0.7rem] text-neutral-100 last:mb-0"
-                    {...p}
-                  />
-                ),
-                a: (p) => <a className="text-accent-600 underline" {...p} />,
-              }}
-            >
-              {issue.plan}
-            </ReactMarkdown>
-          </div>
-
-          {/* Given real visual weight, not a small inline button —
-              approval is the one action in this whole pane that
-              actually unlocks something (the Completed-column gate),
-              so it reads that way: its own card, a full-width primary
-              button, a line stating what it actually does. */}
-          {issue.status === "READY" || issue.status === "DONE" ? (
-            <div className="flex items-center gap-2 rounded-lg border border-success-600/30 bg-success-50 p-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-success-700" />
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-success-700">Plan approved</p>
-                <p className="text-xs text-success-700/80">
-                  {issue.status === "DONE" ? "This ticket is marked done." : "Ready to be marked done once moved to Completed."}
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-2 rounded-lg border border-border bg-surface p-3">
-              <div className="flex items-center justify-between">
-                <Badge variant={STATUS_BADGE_VARIANT[issue.status]}>{issue.status}</Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Approving locks this exact plan and is required before the ticket can be moved
-                to Completed.
-              </p>
-              <Button variant="primary" onClick={onApprove} className="w-full">
-                <CheckCircle2 className="h-3.5 w-3.5" /> Approve plan
-              </Button>
-            </div>
-          )}
-        </>
-      ) : suggestion && suggestedBlocker ? (
-        // The pre-planning gate: Claude found this before writing any
-        // plan, and nothing proceeds until a human addresses it — there
-        // is no "Generate plan" button to show here anymore; confirming
-        // or dismissing THIS is what continues the pipeline (both routes
-        // now auto-enqueue the real plan generation once this resolves).
-        <div className="space-y-1.5 rounded-md border border-accent-300 bg-accent-50 p-3 text-xs">
-          <div className="flex items-center gap-1.5 font-semibold text-accent-700">
-            <Bot className="h-3.5 w-3.5" /> Claude found a dependency — resolve this before planning
-          </div>
-          <p className="text-accent-700">
-            Depends on <span className="font-medium">{suggestedBlocker.title}</span> — expects:{" "}
-            {suggestion.assumedContract}
-          </p>
-          <div className="flex gap-1.5">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => onAddDependency(suggestion.blockerId, suggestion.assumedContract)}
-            >
-              Confirm this dependency
-            </Button>
-            <Button type="button" variant="ghost" size="sm" onClick={onDismissSuggestion}>
-              Not a real dependency — continue planning
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <Button variant="primary" disabled={pending} onClick={onGeneratePlan} className="w-full">
-          {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-          {pending ? "Generating..." : (
-            <>
-              <Sparkles className="h-3.5 w-3.5" /> Generate plan
-            </>
-          )}
-        </Button>
       )}
 
       {/* Its own card, not a plain list folded under a border-t line —

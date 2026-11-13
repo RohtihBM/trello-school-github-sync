@@ -106,6 +106,14 @@ model Issue {
   position        Int
   githubNodeId    String?  @unique // GitHub's permanent id for the issue; null for issues created in-app
   plan            String? // the current AI-generated implementation plan, as markdown
+  // A revised version of `plan` that chat discussion produced — never
+  // applied automatically. Set only when Claude's chat reply proposes a
+  // real change to the plan (not just a clarifying answer); cleared the
+  // moment a human accepts it (copied into `plan`) or rejects it (just
+  // discarded). The existing approve flow is untouched by this: it always
+  // hashes whatever `plan` currently holds, so accepting a revision after
+  // a ticket was already approved correctly requires a fresh approval.
+  proposedPlan    String?
   intendedFiles   String[] // files/modules the plan declares it will touch
   claudeSessionId String? // lets chat `resume` this same session instead of starting fresh
   // Claude's own suggestion, made alongside plan generation, that this

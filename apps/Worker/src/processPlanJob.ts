@@ -24,6 +24,25 @@ import { planGenerationQueue } from "./queue.js";
 // VALUE inside it is optionally parsed, with its own separate fallback.
 const INTENDED_FILES_LINE = /\n?INTENDED_FILES:[^\n]*$/;
 
+// Chat can now end a reply with this marker, followed by a full revised
+// plan — never applied automatically. The route layer only ever writes
+// this into `issue.proposedPlan`, a human has to explicitly accept it
+// before it becomes the real `issue.plan`, same "AI suggests, human
+// confirms" rule as the dependency-suggestion flow. Matched with /s so
+// the revised plan (everything after the marker) can itself contain
+// blank lines.
+const REVISED_PLAN_MARKER = /\n?---REVISED PLAN BELOW---\n?/;
+
+function extractChatReply(rawText: string): { reply: string; proposedPlan: string | null } {
+  const match = rawText.match(REVISED_PLAN_MARKER);
+  if (!match || match.index === undefined) {
+    return { reply: rawText.trim(), proposedPlan: null };
+  }
+  const reply = rawText.slice(0, match.index).trim();
+  const proposedPlan = rawText.slice(match.index + match[0].length).trim();
+  return { reply, proposedPlan: proposedPlan || null };
+}
+
 export interface SuggestedDependency {
   blockerId: string;
   assumedContract: string;
@@ -176,25 +195,56 @@ export async function processChatMessage(jobId: string, message: string): Promis
 
   const repoPath = await ensureRepoCloned();
 
-  const { text: replyText, sessionId } = await runClaudeQuery(message, {
+  // Every chat turn carries this instruction, not just the first — a
+  // resumed session only remembers what Claude itself said before, never
+  // these formatting rules, since they were never actually said out loud
+  // in an earlier turn.
+  const prompt = [
+    message,
+    "\n\nIf — and only if — this message genuinely calls for changing the",
+    "implementation plan itself (not just answering a question about it),",
+    "end your reply with exactly this marker line on its own, followed by",
+    "the complete revised plan (the full plan text, not just a diff or",
+    "summary of the change):\n---REVISED PLAN BELOW---\nOtherwise omit the",
+    "marker entirely and just reply normally.",
+  ].join("");
+
+  const { text: rawText, sessionId } = await runClaudeQuery(prompt, {
     cwd: repoPath,
     resume: job.issue.claudeSessionId,
   });
 
-  if (!replyText.trim()) {
+  if (!rawText.trim()) {
     throw new Error("Claude returned an empty reply");
   }
 
+  const { reply, proposedPlan } = extractChatReply(rawText);
+
+  // Found by actually testing this, not assumed: when Claude's whole
+  // reply is the marker + revised plan with nothing conversational
+  // before it, `reply` comes back empty — which would otherwise store
+  // and render a blank chat bubble. The revised plan itself still shows
+  // up fine in its own banner either way, so this is purely about the
+  // chat message having something to actually say.
   const assistantMessage = await prisma.planMessage.create({
-    data: { issueId: job.issueId, role: "assistant", content: replyText },
+    data: {
+      issueId: job.issueId,
+      role: "assistant",
+      content: reply || "Updated the plan — see the proposed revision below.",
+    },
   });
 
   // A resumed session can, in principle, come back with a new session id
   // (e.g. if forked) — keep claudeSessionId pointed at whatever id future
-  // turns should actually resume, not silently stale.
-  await prisma.issue.update({
+  // turns should actually resume, not silently stale. proposedPlan is
+  // written here but NEVER into `plan` itself — only the accept-revision
+  // route (human-triggered) does that.
+  const updatedIssue = await prisma.issue.update({
     where: { id: job.issueId },
-    data: { claudeSessionId: sessionId ?? job.issue.claudeSessionId },
+    data: {
+      claudeSessionId: sessionId ?? job.issue.claudeSessionId,
+      ...(proposedPlan ? { proposedPlan } : {}),
+    },
   });
 
   await prisma.planGenerationJob.update({
@@ -205,6 +255,7 @@ export async function processChatMessage(jobId: string, message: string): Promis
   await notifyBoard(job.issue.boardId, {
     type: "chat-message",
     message: assistantMessage,
+    issue: updatedIssue,
   });
 }
 

@@ -4,7 +4,7 @@ import type { Issue } from "@repo/db";
 import { requireAuth } from "../middleware/auth.js";
 import { getMembershipForOrg } from "../lib/authz.js";
 import { checkClaudeCallRateLimit } from "../lib/rateLimit.js";
-import { planGenerationQueue } from "../lib/queue.js";
+import { enqueuePlanJob } from "../lib/queue.js";
 import { notifyBoard } from "../lib/notifyBoard.js";
 
 export const planRouter = Router();
@@ -75,7 +75,7 @@ planRouter.post("/issues/:id/generate-plan", requireAuth, async (req, res) => {
     data: { issueId, requestedById: req.userId! },
   });
 
-  await planGenerationQueue.add("check-dependency", { jobId: job.id });
+  await enqueuePlanJob("check-dependency", { jobId: job.id });
 
   // The one place status actually moves OPEN -> PLANNING, and the card
   // auto-moves into "In Progress" — both the instant generation is
@@ -128,6 +128,17 @@ planRouter.post("/issues/:id/chat", requireAuth, async (req, res) => {
       .json({ error: "generate a plan before starting a chat" });
   }
 
+  // A pending revision has to be accepted or rejected before the
+  // conversation continues — the session Claude resumes only ever knows
+  // about the last plan it actually wrote, not an unresolved proposal
+  // still sitting in `proposedPlan`, so letting the discussion race ahead
+  // of it would just talk past a decision the human hasn't made yet.
+  if (gate.issue.proposedPlan) {
+    return res
+      .status(409)
+      .json({ error: "resolve the proposed plan revision before continuing" });
+  }
+
   // Store and broadcast the user's own message immediately — this is what
   // makes it show up in the chat panel right away, before Claude's reply
   // exists at all, same as any normal chat UI.
@@ -144,7 +155,77 @@ planRouter.post("/issues/:id/chat", requireAuth, async (req, res) => {
   // worker's chat handler needs the actual content to send to Claude, and
   // pulling it back out of PlanMessage by some "most recent unanswered"
   // query would be fragile; passing it directly is simpler and exact.
-  await planGenerationQueue.add("chat", { jobId: job.id, message });
+  await enqueuePlanJob("chat", { jobId: job.id, message });
 
   res.status(202).json({ jobId: job.id, status: job.status });
+});
+
+// Accepting a proposed revision replaces `plan` with it — the existing
+// approve route is untouched by this and already does the right thing on
+// its own: it hashes whatever `plan` holds at approve time, so a ticket
+// that was already approved under the OLD text correctly needs a fresh
+// approval for the new one. If it was READY (approved, unblocked) when
+// the plan changed underneath it, that approval is now stale — flip back
+// to PLANNING so the UI actually asks for a new one, rather than quietly
+// leaving a "Plan approved" badge up over text nobody approved. Any other
+// status (BLOCKED, PLANNING) is left as-is: plan text changing doesn't by
+// itself resolve a blocker or need a status change beyond that.
+planRouter.post("/issues/:id/plan/accept-revision", requireAuth, async (req, res) => {
+  const issueId = req.params.id as string;
+
+  const issue = await prisma.issue.findUnique({
+    where: { id: issueId },
+    include: { board: true },
+  });
+  if (!issue) {
+    return res.status(404).json({ error: "issue not found" });
+  }
+
+  const membership = await getMembershipForOrg(req.userId!, issue.board.orgId);
+  if (!membership) {
+    return res.status(403).json({ error: "you are not a member of this organisation" });
+  }
+
+  if (!issue.proposedPlan) {
+    return res.status(400).json({ error: "no proposed revision to accept" });
+  }
+
+  const updated = await prisma.issue.update({
+    where: { id: issueId },
+    data: {
+      plan: issue.proposedPlan,
+      proposedPlan: null,
+      status: issue.status === "READY" ? "PLANNING" : issue.status,
+    },
+  });
+
+  await notifyBoard(issue.boardId, { type: "issue-updated", issue: updated });
+
+  res.json(updated);
+});
+
+planRouter.post("/issues/:id/plan/reject-revision", requireAuth, async (req, res) => {
+  const issueId = req.params.id as string;
+
+  const issue = await prisma.issue.findUnique({
+    where: { id: issueId },
+    include: { board: true },
+  });
+  if (!issue) {
+    return res.status(404).json({ error: "issue not found" });
+  }
+
+  const membership = await getMembershipForOrg(req.userId!, issue.board.orgId);
+  if (!membership) {
+    return res.status(403).json({ error: "you are not a member of this organisation" });
+  }
+
+  const updated = await prisma.issue.update({
+    where: { id: issueId },
+    data: { proposedPlan: null },
+  });
+
+  await notifyBoard(issue.boardId, { type: "issue-updated", issue: updated });
+
+  res.json(updated);
 });

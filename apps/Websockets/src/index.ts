@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import jwt from "jsonwebtoken";
 import { prisma, installCrashGuard } from "@repo/db";
@@ -11,14 +12,20 @@ import {
   type ActionHandler,
   type ClientMessage,
 } from "./handlers.js";
-import { startInternalServer } from "./internal.js";
+import { handleInternalRequest } from "./internal.js";
 
 installCrashGuard("Websockets");
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8081;
 
-const wss = new WebSocketServer({ port: PORT });
-startInternalServer();
+// One http.Server backs both the public WebSocket upgrade and the
+// internal broadcast endpoint — see internal.ts for why this is no
+// longer two separate servers on two separate ports.
+const httpServer = createServer(handleInternalRequest);
+const wss = new WebSocketServer({ server: httpServer });
+httpServer.listen(PORT, () => {
+  console.log(`Websocket server listening on ws://localhost:${PORT}`);
+});
 startBoardSubscriber();
 
 interface JoinMessage {
@@ -203,5 +210,3 @@ async function handleJoin(socket: WebSocket, message: JoinMessage) {
     userId,
   );
 }
-
-console.log(`Websocket server listening on ws://localhost:${PORT}`);

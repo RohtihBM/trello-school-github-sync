@@ -18,6 +18,8 @@ interface IssueDetailContentProps {
   onAddDependency: (blockerId: string, assumedContract: string) => void;
   onApprove: () => void;
   onDismissSuggestion: () => void;
+  onAcceptRevision: () => void;
+  onRejectRevision: () => void;
   onAssign: (userId: string) => void;
   onUnassign: (userId: string) => void;
   onClose: () => void;
@@ -35,6 +37,8 @@ export function IssueDetailContent({
   onAddDependency,
   onApprove,
   onDismissSuggestion,
+  onAcceptRevision,
+  onRejectRevision,
   onAssign,
   onUnassign,
   onClose,
@@ -44,18 +48,27 @@ export function IssueDetailContent({
       issue={issue}
       allIssues={allIssues}
       boardMembers={boardMembers}
-      pending={pending}
-      errorMessage={errorMessage}
       overlaps={overlaps}
-      onGeneratePlan={onGeneratePlan}
       onAddDependency={onAddDependency}
-      onApprove={onApprove}
-      onDismissSuggestion={onDismissSuggestion}
       onAssign={onAssign}
       onUnassign={onUnassign}
     />
   );
-  const chatPane = <ChatPane issue={issue} pending={pending} onSendChat={onSendChat} />;
+  const chatPane = (
+    <ChatPane
+      issue={issue}
+      allIssues={allIssues}
+      pending={pending}
+      errorMessage={errorMessage}
+      onSendChat={onSendChat}
+      onGeneratePlan={onGeneratePlan}
+      onAddDependency={onAddDependency}
+      onDismissSuggestion={onDismissSuggestion}
+      onApprove={onApprove}
+      onAcceptRevision={onAcceptRevision}
+      onRejectRevision={onRejectRevision}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -89,15 +102,15 @@ export function IssueDetailContent({
           grid-cols-1: without it, both panels would want their natural
           content height in a container that doesn't scroll, pushing the
           chat composer off screen instead of splitting the space. */}
-      <div className="grid flex-1 grid-cols-1 grid-rows-2 gap-3 overflow-hidden p-3 sm:grid-cols-2 sm:grid-rows-1">
+      <div className="grid flex-1 grid-cols-1 grid-rows-2 gap-2 overflow-hidden p-2 sm:grid-cols-2 sm:grid-rows-1">
         <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
+          {/* Compact, fixed header — the description itself now lives in
+              the scrollable body below as its own section (see
+              TicketDetailsPane), not here, since a real description with
+              an acceptance-criteria list needs room to grow rather than
+              a header strip that would otherwise keep expanding with it. */}
           <div className="shrink-0 border-b border-border px-3 py-2.5">
             <p className="text-xs font-semibold text-foreground">Ticket details</p>
-            {issue.description ? (
-              <p className="mt-1 text-xs text-muted-foreground">{issue.description}</p>
-            ) : (
-              <p className="mt-1 text-xs italic text-muted-foreground">No description</p>
-            )}
           </div>
           <div className="flex-1 overflow-y-auto">{detailsPane}</div>
         </div>

@@ -1,4 +1,9 @@
-const API_BASE = "http://localhost:3001";
+// Vite only exposes env vars prefixed VITE_, and only ones actually set at
+// BUILD time (not runtime) — the deployed Render Backend URL has to be
+// known when Vercel builds this, via its own VITE_API_URL env var. Falls
+// back to localhost so local dev (no env var set) keeps working exactly
+// as before.
+const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
 
 export function getToken(): string | null {
   return localStorage.getItem("token");
@@ -103,6 +108,9 @@ export interface Issue {
   sectionId: string;
   status: TicketStatus;
   plan: string | null;
+  // A revision to `plan` that chat discussion produced — set only while
+  // waiting on a human to accept or reject it; never applied on its own.
+  proposedPlan: string | null;
   planMessages: PlanMessage[];
   dependsOn: TicketDependency[];
   // Claude's own suggestion from plan generation — never auto-committed;

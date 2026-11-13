@@ -22,7 +22,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog";
 import { toast } from "../hooks/use-toast";
 
-const WS_URL = "ws://localhost:8081";
+// Same pattern as API_BASE in lib/api.ts — the deployed Websockets URL
+// has to be known at Vercel build time via VITE_WS_URL. Render's
+// free/paid web services are served over HTTPS, so the real deployed
+// value here will be wss://, not ws:// — the scheme has to come from
+// the env var itself, not be hardcoded.
+const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8081";
 
 // Several broadcasts (plan-ready, issue-moved) return an issue straight from
 // a Prisma query that never asked for planMessages — not because it's
@@ -156,6 +161,22 @@ export function BoardView() {
       await api(`/issues/${issueId}/dependencies/dismiss-suggestion`, { method: "POST" });
     } catch (err) {
       errorToast("Failed to dismiss suggestion", err);
+    }
+  }
+
+  async function handleAcceptRevision(issueId: string) {
+    try {
+      await api(`/issues/${issueId}/plan/accept-revision`, { method: "POST" });
+    } catch (err) {
+      errorToast("Failed to accept the revised plan", err);
+    }
+  }
+
+  async function handleRejectRevision(issueId: string) {
+    try {
+      await api(`/issues/${issueId}/plan/reject-revision`, { method: "POST" });
+    } catch (err) {
+      errorToast("Failed to keep the current plan", err);
     }
   }
 
@@ -353,12 +374,19 @@ export function BoardView() {
           }
           break;
         case "chat-message":
+          // The user's own message broadcast (sent the instant they hit
+          // Send, before Claude has replied) carries no `issue` — only
+          // the later assistant-reply broadcast does, since that's the
+          // only one that can ever change proposedPlan.
           setSections((prev) =>
             prev.map((s) => ({
               ...s,
               issues: s.issues.map((i) =>
                 i.id === message.message.issueId
-                  ? { ...i, planMessages: [...i.planMessages, message.message] }
+                  ? {
+                      ...(message.issue ? mergeIssue(i, message.issue) : i),
+                      planMessages: [...i.planMessages, message.message],
+                    }
                   : i,
               ),
             })),
@@ -625,10 +653,16 @@ export function BoardView() {
         {/* Full-screen below sm — a focused dialog floating over a dimmed
             board makes sense with room to spare on desktop; on a phone
             it would just be a cramped box inside an already-small
-            screen, so it becomes the whole screen instead. */}
+            screen, so it becomes the whole screen instead.
+
+            Sized much closer to the actual viewport on desktop too
+            (95vh/95vw up to a 6xl cap, not 85vh/90vw/4xl) — reading a
+            real description with acceptance criteria, a generated plan,
+            and chatting all at once needs real room, not a modal that
+            leaves most of the screen as dimmed backdrop. */}
         <DialogContent
           hideClose
-          className="flex h-screen w-screen max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[85vh] sm:w-[90vw] sm:max-w-4xl sm:rounded-lg"
+          className="flex h-screen w-screen max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[95vh] sm:w-[95vw] sm:max-w-6xl sm:rounded-lg"
         >
           {selectedIssue && (
             <IssueDetailContent
@@ -645,6 +679,8 @@ export function BoardView() {
               }
               onApprove={() => handleApprove(selectedIssue.id)}
               onDismissSuggestion={() => handleDismissSuggestion(selectedIssue.id)}
+              onAcceptRevision={() => handleAcceptRevision(selectedIssue.id)}
+              onRejectRevision={() => handleRejectRevision(selectedIssue.id)}
               onAssign={(userId) => handleAssign(selectedIssue.id, userId)}
               onUnassign={(userId) => handleUnassign(selectedIssue.id, userId)}
               onClose={closeDetail}

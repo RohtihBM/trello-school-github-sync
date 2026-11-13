@@ -4,7 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { getMembershipForOrg } from "../lib/authz.js";
 import { wouldCreateCycle } from "../lib/cycleCheck.js";
 import { notifyBoard } from "../lib/notifyBoard.js";
-import { planGenerationQueue } from "../lib/queue.js";
+import { enqueuePlanJob } from "../lib/queue.js";
 
 export const dependencyRouter = Router();
 
@@ -26,7 +26,7 @@ async function continuePlanGeneration(issueId: string, requestedById: string) {
   const job = await prisma.planGenerationJob.create({
     data: { issueId, requestedById },
   });
-  await planGenerationQueue.add("generate-plan", { jobId: job.id });
+  await enqueuePlanJob("generate-plan", { jobId: job.id });
 }
 
 dependencyRouter.post("/issues/:id/dependencies", requireAuth, async (req, res) => {

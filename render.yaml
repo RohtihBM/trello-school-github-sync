@@ -1,0 +1,74 @@
+services:
+  - type: web
+    name: trello-school-backend
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Backend
+    startCommand: npm run start --workspace=apps/Backend
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: INTERNAL_API_SECRET
+        sync: false
+      # The deployed Websockets service's public URL + /internal/broadcast —
+      # see apps/Websockets/src/internal.ts for why this is the public URL
+      # now, not a private-network-only port.
+      - key: INTERNAL_BROADCAST_URL
+        sync: false
+      - key: GITHUB_SYNC_BOARD_ID
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      # The deployed Worker service's own URL — pinged (fire-and-forget) on
+      # every job enqueue to wake it from Render's free-tier sleep. See
+      # apps/Backend/src/lib/queue.ts and apps/Worker/src/index.ts.
+      - key: WORKER_WAKE_URL
+        sync: false
+
+  - type: web
+    name: trello-school-websockets
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Websockets
+    startCommand: npm run start --workspace=apps/Websockets
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: INTERNAL_API_SECRET
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+  # Not a real Render "Background Worker" (that service type starts at
+  # $7/month) — deployed as a free Web Service instead, with a minimal
+  # health endpoint added purely to satisfy Render's health check. See
+  # apps/Worker/src/index.ts for the full reasoning and the sleep/wake
+  # tradeoff this accepts.
+  - type: web
+    name: trello-school-worker
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Worker
+    startCommand: npm run start --workspace=apps/Worker
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: INTERNAL_API_SECRET
+        sync: false
+      - key: INTERNAL_BROADCAST_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      # The real, metered API key — this is what makes the deployed Worker
+      # actually call Claude, since it has no local Claude Code CLI login
+      # to fall back on. Never set this in a LOCAL .env — see the project
+      # history on why local dev deliberately stays on the free
+      # subscription login instead.
+      - key: ANTHROPIC_API_KEY
+        sync: false

@@ -1,0 +1,6 @@
+-- Empty on purpose: this migration name is already recorded as applied in
+-- the database from earlier local dev iteration, but its original folder
+-- was replaced by 20261111184620_board_description (same logical change,
+-- the one that actually adds the column). This file exists only so the
+-- migrations directory and the database's history agree; the real
+-- ALTER TABLE lives in that later migration.
