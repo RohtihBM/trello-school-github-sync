@@ -3,7 +3,7 @@ services:
     name: trello-school-backend
     runtime: node
     plan: free
-    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Backend
+    buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Backend
     startCommand: npm run start --workspace=apps/Backend
     envVars:
       - key: DATABASE_URL
@@ -33,7 +33,7 @@ services:
     name: trello-school-websockets
     runtime: node
     plan: free
-    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Websockets
+    buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Websockets
     startCommand: npm run start --workspace=apps/Websockets
     envVars:
       - key: DATABASE_URL
@@ -54,7 +54,7 @@ services:
     name: trello-school-worker
     runtime: node
     plan: free
-    buildCommand: npm install && npm run generate --workspace=packages/db && npm run build --workspace=apps/Worker
+    buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Worker
     startCommand: npm run start --workspace=apps/Worker
     envVars:
       - key: DATABASE_URL
