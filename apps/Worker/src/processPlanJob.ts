@@ -1,3 +1,7 @@
+import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { promisify } from "node:util";
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { Prisma, prisma } from "@repo/db";
 import { ensureRepoCloned } from "./repoClone.js";
@@ -104,9 +108,43 @@ interface RunContext {
   jobId: string;
 }
 
-// Only "agentic" exists today; the field is here so runs stay comparable
-// once other strategies are added (docs/context-engineering-plan.md).
-const CONTEXT_STRATEGY = "agentic";
+// "agentic" is today's behaviour and the default, so nothing changes unless
+// CONTEXT_STRATEGY=lean is set. "lean" swaps the SDK's large built-in system
+// prompt for a short one: Phase 0 showed the agent re-reads its whole
+// starting context on every one of ~25 turns, so that fixed prefix is
+// paid for ~25 times per plan (docs/context-engineering-plan.md).
+// "full" sends the repo's source in the prompt and gives the agent no tools,
+// so a plan is one request instead of ~25 re-reads of a growing context.
+const CONTEXT_STRATEGY: "agentic" | "lean" | "full" =
+  process.env.CONTEXT_STRATEGY === "lean" || process.env.CONTEXT_STRATEGY === "full"
+    ? process.env.CONTEXT_STRATEGY
+    : "agentic";
+
+const LEAN_SYSTEM_PROMPT = [
+  "You are a senior engineer writing an implementation plan for a ticket in an existing codebase.",
+  "The repository is available either as source included in the user's message or through the Read, Grep and Glob tools. Never try to modify files or run commands.",
+  "Look only at what the ticket needs, then write the plan in markdown.",
+  "Follow any output-format instructions in the user's message exactly.",
+].join(" ");
+
+const exec = promisify(execFile);
+
+// Source only (not docs, lockfiles or the generated Prisma client): roughly
+// 64K tokens for this repo at the time of writing, well inside the model's
+// 200K window. This approach stops working as the repo grows.
+async function buildRepoSnapshot(repoPath: string): Promise<string> {
+  const { stdout } = await exec("git", ["ls-files"], { cwd: repoPath, maxBuffer: 10 * 1024 * 1024 });
+  const files = stdout
+    .split("\n")
+    .filter((f) => /\.(ts|tsx|prisma)$/.test(f) && !f.includes("generated/") && !f.endsWith(".d.ts"));
+
+  const parts: string[] = [];
+  for (const file of files) {
+    const content = await readFile(path.join(repoPath, file), "utf8");
+    parts.push(`=== ${file} ===\n${content}`);
+  }
+  return parts.join("\n\n");
+}
 
 async function recordRunMetric(
   ctx: RunContext,
@@ -233,7 +271,11 @@ async function runClaudeQuery(
 
   const result = query({
     prompt,
-    options: { ...RESTRICTED_OPTIONS, ...extraOptions },
+    options: {
+      ...RESTRICTED_OPTIONS,
+      ...(CONTEXT_STRATEGY !== "agentic" ? { systemPrompt: LEAN_SYSTEM_PROMPT } : {}),
+      ...extraOptions,
+    },
   });
 
   for await (const message of result) {
@@ -266,20 +308,38 @@ export async function processPlanJob(jobId: string): Promise<void> {
 
   const repoPath = await ensureRepoCloned();
 
+  const useFullSnapshot = CONTEXT_STRATEGY === "full";
+
   const prompt = [
+    useFullSnapshot ? `The repository's full source follows.\n\n${await buildRepoSnapshot(repoPath)}\n\n` : "",
     `Ticket: ${job.issue.title}`,
     job.issue.description ? `\n${job.issue.description}` : "",
     "\n\nWrite a concrete implementation plan for this ticket, grounded in",
-    "the actual code in this repository. Read whatever files are relevant",
-    "before proposing the plan.",
+    "the actual code in this repository.",
+    useFullSnapshot
+      ? "All of the source is above, so you do not need to read any files."
+      : "Read whatever files are relevant before proposing the plan.",
     "\n\nEnd your response with exactly one more line — a JSON array of",
     "repo-relative file paths this plan's implementation would touch, or",
     '[] if none: INTENDED_FILES: ["path/one.ts"]',
   ].join("");
 
+  // Full-snapshot runs get no tools at all and a tight turn cap: the point
+  // is a single request, not an exploration loop. Prompt caching is turned
+  // off for that one request: measured, the SDK otherwise writes the whole
+  // prompt to a cache at ~$2/M tokens (double the plain $1/M input price)
+  // for a request that is never repeated, which roughly doubled its cost.
   const { text: rawText, sessionId } = await runClaudeQuery(
     prompt,
-    { cwd: repoPath },
+    useFullSnapshot
+      ? {
+          cwd: repoPath,
+          tools: [],
+          allowedTools: [],
+          maxTurns: 3,
+          env: { ...process.env, DISABLE_PROMPT_CACHING: "1" },
+        }
+      : { cwd: repoPath },
     { kind: "plan", issueId: job.issueId, jobId },
   );
 

@@ -22,6 +22,25 @@ What this shows:
 - **A second model, `claude-haiku-5-5`, appears on every call** alongside the pinned `claude-haiku-4-5`. The SDK makes background calls of its own; this is real, previously invisible spend.
 - Back-of-envelope for variant C: ~64K input tokens at $1/M is ~$0.06 plus output, so sending the whole repo may be *cheaper* than 25 agent turns. Phase 1 exists to confirm this, not assume it.
 
+## Experiment results (same ticket, one run each; single samples, treat as approximate)
+
+Selected with `CONTEXT_STRATEGY` on the Worker (`agentic` default, `lean`, `full`).
+
+| Strategy | Turns | Time | Cost | Files named (all real) |
+|---|---|---|---|---|
+| `agentic` (today) | 25 | 68 s | $0.245 | 7 |
+| `lean` (short system prompt) | 31 | 72 s | $0.236 | 7 (6 shared) |
+| `full` (whole source in prompt, no tools) | 1 | 58 s | $0.202 | 6 (all in baseline) |
+| `full` + prompt caching off for the plan call | 1 | 40 s | **$0.109** | 5 (all in baseline's 7) |
+
+- **`lean` did not help.** The re-read context per turn fell by ~33%, but the agent took 6 more turns, cancelling it out (-4%, within noise).
+- **`full` with caching off: plan about 55% cheaper, about 42% faster.**
+- **Why caching off matters:** measured on a controlled call, the SDK's default prompt caching writes a one-shot prompt to the cache at ~$2/M tokens (double the plain $1/M input price). Switching it off (`DISABLE_PROMPT_CACHING=1` via the SDK `env` option) halved the main model's cost for that call ($0.0416 to $0.0211). It is only worth having when the cached prefix is reused, as in the 25-turn agent loop.
+- **The second model (`claude-haiku-5-5`) is cheap.** It receives the whole prompt on every call but outputs ~20 tokens and costs ~$0.0001 per thousand input tokens.
+- **Chat got worse under `full`:** resuming a session that contains the whole source re-sent ~84K tokens and cost **$0.170** per cold chat reply, against $0.096 under `agentic`. Net per ticket (plan + one cold chat): about 18% cheaper, not 55%.
+- **Estimate, not measured:** a chat that starts from a fresh context (ticket + approved plan + last few messages) instead of resuming the transcript would cost roughly $0.01-0.03 per reply, bringing a whole ticket to roughly 60% cheaper. Changing chat from session-resume to fresh-context alters agreed behavior and needs a decision first.
+- **Limits of `full`:** the source is ~76K tokens by the main model's count (~99K by the second model's), so there is roughly 2x headroom in a 200K window. Past that it needs a repo map or selective inclusion.
+
 Measurement caveats found while building this:
 - For a **resumed** session the SDK reports the whole saved session's cost and tokens, not just the new call. Chat rows are therefore stored as a delta against the ticket's earlier plan/chat rows (see `sessionTotalsSoFar` in `processPlanJob.ts`); a chat on a session with no recorded plan run is skipped.
 - Costs are the SDK's own estimates, not a billing statement.
