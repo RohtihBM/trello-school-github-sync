@@ -5,7 +5,27 @@ apply the winner. Covers: long context vs RAG vs agentic search, a deterministic
 repo map, trimming the dependency-check prompt, path validation, and
 untrusted-input hardening.
 
-Status: **not started.** Nothing below is implemented yet.
+Status: **Phase 0 done and verified (2026-11-15).** Phases 1–8 not started.
+
+## Phase 0 results (measured, one fresh ticket: plan then one chat reply)
+
+| Call | Turns | Time | Input (uncached) | Output | Cache read | Cache write | Cost |
+|---|---|---|---|---|---|---|---|
+| Dependency check | 1 | 7 s | 4,261 | 713 | 0 | 0 | **$0.005** |
+| Plan generation | 25 of 30 | 68 s | 5,734 | 6,199 | 1,125,407 | 48,543 | **$0.245** |
+| One chat reply (resumed session) | 1 | 4.8 s | 10 | 399 | 0 | 47,076 | **$0.096** |
+
+What this shows:
+- **A plan costs about $0.24 (~₹20), roughly 5–6x the earlier $0.03–0.05 estimate.** Almost all of it is the agent re-reading its own growing context every turn: ~1.1M cache-read tokens over 25 turns is ~45K tokens re-read per turn.
+- **One one-sentence chat reply cost about $0.10 (~₹8).** Resuming re-sent the whole ~47K-token exploration transcript and missed the prompt cache entirely (cache read 0).
+- **The dependency check really is cheap** (half a cent), as the two-stage design intended. It has a fixed ~4.2K-token input.
+- **A second model, `claude-haiku-5-5`, appears on every call** alongside the pinned `claude-haiku-4-5`. The SDK makes background calls of its own; this is real, previously invisible spend.
+- Back-of-envelope for variant C: ~64K input tokens at $1/M is ~$0.06 plus output, so sending the whole repo may be *cheaper* than 25 agent turns. Phase 1 exists to confirm this, not assume it.
+
+Measurement caveats found while building this:
+- For a **resumed** session the SDK reports the whole saved session's cost and tokens, not just the new call. Chat rows are therefore stored as a delta against the ticket's earlier plan/chat rows (see `sessionTotalsSoFar` in `processPlanJob.ts`); a chat on a session with no recorded plan run is skipped.
+- Costs are the SDK's own estimates, not a billing statement.
+- A stale Worker process from Nov 11 was still consuming the same queue with old code and had to be stopped before plan calls were recorded. Check for duplicate Workers (`ps`, working directory `apps/Worker`) before any experiment.
 
 ---
 
@@ -176,10 +196,13 @@ Phase 5 (2–3), Phase 6 test (1–2) and Phase 7 (a few chat messages).
 
 | Item | Rough API-equivalent cost |
 |---|---|
-| Plan call, agentic | ~$0.03–0.05 |
-| Plan call, long context (~64K input tokens) | ~$0.07–0.09 |
-| Phase 1 total (15 runs) | ≈ $0.75–1.0 ≈ ₹60–85 |
-| Everything else | ≈ ₹30–50 |
+| Plan call, agentic (**measured**) | ~$0.24 |
+| Chat reply, resumed session (**measured**) | ~$0.10 |
+| Plan call, long context (~64K input tokens, estimate) | ~$0.07–0.12 |
+| Phase 1 total (5 tickets x 3 variants = 15 runs) | ≈ $2.0–3.5 ≈ ₹170–290 |
+| Everything else | ≈ ₹50–100 |
+
+The estimates above this line were revised upward after Phase 0 measured real calls.
 
 Local runs go through the CLI subscription login, but Anthropic's treatment of Agent
 SDK usage has changed, so treat the table above as the worst case if it is billed.
