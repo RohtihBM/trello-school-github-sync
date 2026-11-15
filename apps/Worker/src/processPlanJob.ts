@@ -98,9 +98,135 @@ const RESTRICTED_OPTIONS = {
   maxTurns: MAX_TURNS,
 } satisfies Partial<Options>;
 
+interface RunContext {
+  kind: "dependency-check" | "plan" | "chat";
+  issueId: string;
+  jobId: string;
+}
+
+// Only "agentic" exists today; the field is here so runs stay comparable
+// once other strategies are added (docs/context-engineering-plan.md).
+const CONTEXT_STRATEGY = "agentic";
+
+async function recordRunMetric(
+  ctx: RunContext,
+  result: {
+    num_turns: number;
+    duration_ms: number;
+    total_cost_usd: number;
+    is_error: boolean;
+    modelUsage: Record<
+      string,
+      {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadInputTokens: number;
+        cacheCreationInputTokens: number;
+      }
+    >;
+  },
+): Promise<void> {
+  const usages = Object.values(result.modelUsage);
+  const sum = (pick: (u: (typeof usages)[number]) => number) =>
+    usages.reduce((total, u) => total + pick(u), 0);
+
+  // Measuring a call must never be able to fail the call itself.
+  try {
+    const reported: Totals = {
+      cost: result.total_cost_usd,
+      input: sum((u) => u.inputTokens),
+      output: sum((u) => u.outputTokens),
+      cacheRead: sum((u) => u.cacheReadInputTokens),
+      cacheCreation: sum((u) => u.cacheCreationInputTokens),
+    };
+
+    // Found by testing this, not assumed: for a RESUMED session the SDK's
+    // cost and token totals continue from what the session transcript
+    // already held, so a chat message reported the whole ticket's session
+    // history (e.g. $0.91 for a 5-second, 1-turn reply). Only chat resumes;
+    // plan and dependency-check start fresh sessions, so their numbers are
+    // already per-call.
+    let delta = reported;
+    if (ctx.kind === "chat") {
+      const before = await sessionTotalsSoFar(ctx.issueId);
+      if (!before) {
+        console.log(`skipping chat metric for issue ${ctx.issueId}: no recorded plan run to subtract from`);
+        return;
+      }
+      delta = {
+        cost: Math.max(0, reported.cost - before.cost),
+        input: Math.max(0, reported.input - before.input),
+        output: Math.max(0, reported.output - before.output),
+        cacheRead: Math.max(0, reported.cacheRead - before.cacheRead),
+        cacheCreation: Math.max(0, reported.cacheCreation - before.cacheCreation),
+      };
+    }
+
+    await prisma.aiRunMetric.create({
+      data: {
+        kind: ctx.kind,
+        strategy: CONTEXT_STRATEGY,
+        model: Object.keys(result.modelUsage).join(",") || RESTRICTED_OPTIONS.model,
+        issueId: ctx.issueId,
+        jobId: ctx.jobId,
+        turns: result.num_turns,
+        durationMs: result.duration_ms,
+        inputTokens: delta.input,
+        outputTokens: delta.output,
+        cacheReadTokens: delta.cacheRead,
+        cacheCreationTokens: delta.cacheCreation,
+        costUsd: delta.cost,
+        isError: result.is_error,
+      },
+    });
+  } catch (err) {
+    console.error("failed to record AI run metric:", err);
+  }
+}
+
+interface Totals {
+  cost: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+// Everything already recorded for this ticket's current session: the latest
+// plan run (which started the session) plus every chat since. Their
+// per-call values add back up to the session's running total. Null when no
+// plan run was ever recorded (a session from before metrics existed), since
+// there is then nothing reliable to subtract.
+async function sessionTotalsSoFar(issueId: string): Promise<Totals | null> {
+  const planRow = await prisma.aiRunMetric.findFirst({
+    where: { issueId, kind: "plan" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!planRow) return null;
+
+  const rows = await prisma.aiRunMetric.findMany({
+    where: {
+      issueId,
+      kind: { in: ["plan", "chat"] },
+      createdAt: { gte: planRow.createdAt },
+    },
+  });
+  return rows.reduce<Totals>(
+    (t, r) => ({
+      cost: t.cost + r.costUsd,
+      input: t.input + r.inputTokens,
+      output: t.output + r.outputTokens,
+      cacheRead: t.cacheRead + r.cacheReadTokens,
+      cacheCreation: t.cacheCreation + r.cacheCreationTokens,
+    }),
+    { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+  );
+}
+
 async function runClaudeQuery(
   prompt: string,
   extraOptions: Partial<Options>,
+  ctx: RunContext,
 ): Promise<{ text: string; sessionId: string | undefined }> {
   let text = "";
   let sessionId: string | undefined;
@@ -120,6 +246,7 @@ async function runClaudeQuery(
     }
     if (message.type === "result") {
       sessionId = message.session_id;
+      await recordRunMetric(ctx, message);
     }
   }
 
@@ -150,9 +277,11 @@ export async function processPlanJob(jobId: string): Promise<void> {
     '[] if none: INTENDED_FILES: ["path/one.ts"]',
   ].join("");
 
-  const { text: rawText, sessionId } = await runClaudeQuery(prompt, {
-    cwd: repoPath,
-  });
+  const { text: rawText, sessionId } = await runClaudeQuery(
+    prompt,
+    { cwd: repoPath },
+    { kind: "plan", issueId: job.issueId, jobId },
+  );
 
   if (!rawText.trim()) {
     throw new Error("Claude returned an empty plan");
@@ -209,10 +338,11 @@ export async function processChatMessage(jobId: string, message: string): Promis
     "marker entirely and just reply normally.",
   ].join("");
 
-  const { text: rawText, sessionId } = await runClaudeQuery(prompt, {
-    cwd: repoPath,
-    resume: job.issue.claudeSessionId,
-  });
+  const { text: rawText, sessionId } = await runClaudeQuery(
+    prompt,
+    { cwd: repoPath, resume: job.issue.claudeSessionId },
+    { kind: "chat", issueId: job.issueId, jobId },
+  );
 
   if (!rawText.trim()) {
     throw new Error("Claude returned an empty reply");
@@ -301,10 +431,11 @@ export async function processDependencyCheck(jobId: string): Promise<void> {
           .join("\n"),
     ].join("");
 
-    const { text: rawText } = await runClaudeQuery(prompt, {
-      tools: [],
-      allowedTools: [],
-    });
+    const { text: rawText } = await runClaudeQuery(
+      prompt,
+      { tools: [], allowedTools: [] },
+      { kind: "dependency-check", issueId: job.issueId, jobId },
+    );
 
     const siblingIds = new Set(siblingTickets.map((t) => t.id));
     try {

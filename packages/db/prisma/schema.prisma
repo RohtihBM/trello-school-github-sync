@@ -264,3 +264,30 @@ model Comment {
   @@index([issueId])
   @@index([authorId])
 }
+
+// One row per Claude call the Worker makes (dependency check, plan, chat).
+// Exists to measure what each call actually costs before changing how much
+// context is sent (docs/context-engineering-plan.md). issueId/jobId are
+// plain strings, not relations, on purpose: metrics should survive a
+// ticket being deleted, and a failed metric write must never be able to
+// cascade into anything else.
+model AiRunMetric {
+  id                  String   @id @default(cuid())
+  kind                String // "dependency-check" | "plan" | "chat"
+  strategy            String   @default("agentic") // which context strategy was used
+  model               String
+  issueId             String?
+  jobId               String?
+  turns               Int
+  durationMs          Int
+  inputTokens         Int
+  outputTokens        Int
+  cacheReadTokens     Int
+  cacheCreationTokens Int
+  costUsd             Float
+  isError             Boolean  @default(false)
+  createdAt           DateTime @default(now())
+
+  @@index([kind, createdAt])
+  @@index([issueId])
+}
