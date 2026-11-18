@@ -82,7 +82,7 @@ How the embedding side works now:
 
 1. **Chunk:** each source file is split at function and component boundaries; each chunk gets a fingerprint, `sha1(model name + path + text)`.
 2. **Store:** vectors (384 numbers each, from `Xenova/bge-small-en-v1.5`, run locally) live in the `CodeChunkEmbedding` table in Neon. The table holds the fingerprint, the model name and the vector, not the text. The migration also enables the `vector` extension.
-3. **Index:** `apps/Worker/src/scripts/indexRepo.ts` embeds only fingerprints Neon does not have yet, and with `PRUNE=1` deletes vectors nothing refers to. The GitHub Action `.github/workflows/index-embeddings.yml` runs it on every push to `main` that touches code.
+3. **Index:** `apps/Worker/src/scripts/indexRepo.ts` embeds only fingerprints Neon does not have yet, and with `PRUNE=1` deletes vectors nothing refers to. The GitHub Action in `docs/ci/index-embeddings.workflow.yml` runs it on every push to `main` that touches code. **It is not enabled yet:** see "Enabling the indexer" below.
 4. **Search:** the ticket text is embedded and Postgres ranks stored vectors by cosine distance (`<=>`), limited to the chunks in the current checkout. The result is fused with the keyword ranking by reciprocal rank fusion.
 5. **Fallback:** if vectors are missing or the model cannot load, the Worker uses keyword ranking only. `EMBED_MISSING=false` makes a small server only read vectors and never embed chunks itself.
 
@@ -114,6 +114,16 @@ Same 4 tickets, one run each, `RETRIEVAL=keyword` (no embeddings at all), $0.275
 | Answer-key files mentioned anywhere | 95% | 95% |
 
 On this sample the embeddings improved which files were *shown* offline (93% to 100% recall) but made no measurable difference to the finished plans. The deployed Worker is therefore set to `CONTEXT_STRATEGY=retrieval` with `RETRIEVAL=keyword`, which runs inside Render's 512 MB. Four tickets and one run each is thin evidence either way.
+
+### Enabling the indexer (not done yet)
+
+The workflow file sits in `docs/ci/` because GitHub refused a push that created a file under `.github/workflows/` from a login without the `workflow` permission. To switch it on:
+
+1. Add a repository secret named `DATABASE_URL` (the Neon connection string): GitHub, Settings, Secrets and variables, Actions.
+2. Put the file at `.github/workflows/index-embeddings.yml`, either by adding it in GitHub's web editor or by refreshing your login with the `workflow` permission and pushing it (for the GitHub CLI: `gh auth refresh -s workflow`).
+3. Run it once from the Actions tab ("Run workflow") and check that it reports its chunk counts.
+
+Until then nothing in production depends on it: the deployed Worker uses keyword retrieval, and hybrid retrieval runs where someone has run `indexRepo.ts` by hand.
 
 ### Retrieval experiment (branch `experiment/context-retrieval`, not on main)
 

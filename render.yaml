@@ -85,7 +85,7 @@ services:
       # and never loads the embedding model to index (a 512 MB server cannot
       # hold it next to Claude's own process). The vectors
       # are written to Postgres by the GitHub Action in
-      # .github/workflows/index-embeddings.yml. Switch RETRIEVAL to "hybrid"
+      # docs/ci/index-embeddings.workflow.yml (not enabled yet). Switch RETRIEVAL to "hybrid"
       # only after checking the Worker's memory on Render with the model loaded
       # (about 340 MB peak on a Mac for the read-only path).
       - key: CONTEXT_STRATEGY
