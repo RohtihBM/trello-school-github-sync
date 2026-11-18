@@ -1,0 +1,56 @@
+# Runs the whole backend side on one server. The Frontend stays on Vercel;
+# Redis (Upstash) and Postgres (Neon) stay hosted. Secrets come from
+# deploy/.env on the server, never from the repo.
+x-app: &app
+  build:
+    context: .
+  restart: unless-stopped
+  env_file: deploy/.env
+  environment:
+    ONNXRUNTIME_NODE_INSTALL: skip
+
+services:
+  backend:
+    <<: *app
+    build:
+      context: .
+      args: { APP: Backend }
+    environment:
+      PORT: "3001"
+      INTERNAL_BROADCAST_URL: http://websockets:8081/internal/broadcast
+
+  websockets:
+    <<: *app
+    build:
+      context: .
+      args: { APP: Websockets }
+    environment:
+      PORT: "8081"
+
+  worker:
+    <<: *app
+    build:
+      context: .
+      args: { APP: Worker }
+    environment:
+      INTERNAL_BROADCAST_URL: http://websockets:8081/internal/broadcast
+      CONTEXT_STRATEGY: retrieval
+      RETRIEVAL: hybrid
+      EMBED_MISSING: "true"
+    volumes:
+      # Repository clones and the embedding model cache survive restarts.
+      - worker-cache:/app/apps/Worker/.repo-cache
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    env_file: deploy/.env
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on: [backend, websockets]
+
+volumes:
+  worker-cache:
+  caddy-data:

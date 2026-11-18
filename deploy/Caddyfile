@@ -1,0 +1,10 @@
+# Caddy terminates HTTPS (certificates from Let's Encrypt, automatic) and
+# forwards to the containers over Docker's internal network. WebSocket
+# upgrades are proxied without extra configuration.
+{$API_HOST} {
+	reverse_proxy backend:3001
+}
+
+{$WS_HOST} {
+	reverse_proxy websockets:8081
+}
