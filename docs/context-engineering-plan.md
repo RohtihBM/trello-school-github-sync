@@ -41,6 +41,33 @@ Selected with `CONTEXT_STRATEGY` on the Worker (`agentic` default, `lean`, `full
 - **Estimate, not measured:** a chat that starts from a fresh context (ticket + approved plan + last few messages) instead of resuming the transcript would cost roughly $0.01-0.03 per reply, bringing a whole ticket to roughly 60% cheaper. Changing chat from session-resume to fresh-context alters agreed behavior and needs a decision first.
 - **Limits of `full`:** the source is ~76K tokens by the main model's count (~99K by the second model's), so there is roughly 2x headroom in a 200K window. Past that it needs a repo map or selective inclusion.
 
+## Update (2026-11-18): repeat runs, and where the retrieval experiment lives
+
+Second samples on the same ticket, after the cleanup that produced the final code on `main`:
+
+| Strategy | Runs | Cost | Time | Turns |
+|---|---|---|---|---|
+| `agentic` (default) | 2 | $0.245, $0.265 | 68 s, 71 s | 25, 23 |
+| `full` (caching off) | 2 | $0.109, $0.126 | 40 s, 58 s | 1, 1 |
+
+- **Averaged over two runs each, `full` is about 54% cheaper and about 29% faster per plan.** The earlier "-55% / -42%" came from one run each; the time saving was on the lucky side.
+- **The dependency check varies run to run** ($0.0049 to $0.0126, with the SDK sometimes caching its prompt and sometimes not). An earlier suspicion that trimming its prompt made it worse was wrong: the original, untrimmed code cost $0.0126 in the latest run. Its share of a plan's cost is 2-5%, not a fixed 2%.
+- **Chat resumes its session** (unchanged), and each prompt now also restates the current plan, since an accepted revision lives in the database and not in the session. Verified working: a chat reply came back normally.
+- **`full` only works while all the source fits the model's context window**, which is roughly 100K tokens for this repo today (conservative count). The window is 200K, so there is not a lot of headroom.
+
+### Retrieval experiment (branch `experiment/context-retrieval`, not on main)
+
+Chunking, a local embedding model, rank fusion and a "map plus selected code" mode, measured offline on 10 tickets labelled by hand (`docs/eval/retrieval-tickets.json` on that branch; the labels are my own judgement and should be reviewed):
+
+| Strategy | Recall at 40K-token budget | Recall at 20K |
+|---|---|---|
+| Whole-file keyword scoring | 73% | 47% |
+| Function-level chunk keyword scoring | 93% | 74% |
+| Chunks plus local embeddings (vector only) | 100% | 93% |
+| Chunks plus embeddings, fused with keywords | 98% | 86% |
+
+It is **not** used in production: the one live end-to-end run of the map mode cost $0.237 (no saving over the default agent) and named 2 of the 7 files the baseline named, and indexing needs about 1 GB of memory (the single-query path about 325 MB), more than Render's free tier. Treat it as an offline experiment, not a feature.
+
 Measurement caveats found while building this:
 - For a **resumed** session the SDK reports the whole saved session's cost and tokens, not just the new call. Chat rows are therefore stored as a delta against the ticket's earlier plan/chat rows (see `sessionTotalsSoFar` in `processPlanJob.ts`); a chat on a session with no recorded plan run is skipped.
 - Costs are the SDK's own estimates, not a billing statement.

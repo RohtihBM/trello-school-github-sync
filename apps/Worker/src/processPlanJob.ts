@@ -104,23 +104,22 @@ const RESTRICTED_OPTIONS = {
 
 interface RunContext {
   kind: "dependency-check" | "plan" | "chat";
+  strategy: string;
   issueId: string;
   jobId: string;
 }
 
 // "agentic" is today's behaviour and the default, so nothing changes unless
-// CONTEXT_STRATEGY=lean is set. "lean" swaps the SDK's large built-in system
-// prompt for a short one: Phase 0 showed the agent re-reads its whole
-// starting context on every one of ~25 turns, so that fixed prefix is
-// paid for ~25 times per plan (docs/context-engineering-plan.md).
-// "full" sends the repo's source in the prompt and gives the agent no tools,
-// so a plan is one request instead of ~25 re-reads of a growing context.
-const CONTEXT_STRATEGY: "agentic" | "lean" | "full" =
-  process.env.CONTEXT_STRATEGY === "lean" || process.env.CONTEXT_STRATEGY === "full"
-    ? process.env.CONTEXT_STRATEGY
-    : "agentic";
+// CONTEXT_STRATEGY=full is set. "full" sends the repo's source in the prompt
+// and gives the agent no tools, so a plan is one request instead of ~25
+// re-reads of a growing context (measured in docs/context-engineering-plan.md).
+// It only works while the whole source fits the model's context window.
+const CONTEXT_STRATEGY: "agentic" | "full" =
+  process.env.CONTEXT_STRATEGY === "full" ? "full" : "agentic";
 
-const LEAN_SYSTEM_PROMPT = [
+// Used only with "full", matching what was measured: the source is in the
+// message, so there is nothing to explore.
+const FULL_SYSTEM_PROMPT = [
   "You are a senior engineer writing an implementation plan for a ticket in an existing codebase.",
   "The repository is available either as source included in the user's message or through the Read, Grep and Glob tools. Never try to modify files or run commands.",
   "Look only at what the ticket needs, then write the plan in markdown.",
@@ -203,7 +202,7 @@ async function recordRunMetric(
     await prisma.aiRunMetric.create({
       data: {
         kind: ctx.kind,
-        strategy: CONTEXT_STRATEGY,
+        strategy: ctx.strategy,
         model: Object.keys(result.modelUsage).join(",") || RESTRICTED_OPTIONS.model,
         issueId: ctx.issueId,
         jobId: ctx.jobId,
@@ -273,7 +272,7 @@ async function runClaudeQuery(
     prompt,
     options: {
       ...RESTRICTED_OPTIONS,
-      ...(CONTEXT_STRATEGY !== "agentic" ? { systemPrompt: LEAN_SYSTEM_PROMPT } : {}),
+      ...(CONTEXT_STRATEGY === "full" ? { systemPrompt: FULL_SYSTEM_PROMPT } : {}),
       ...extraOptions,
     },
   });
@@ -340,7 +339,7 @@ export async function processPlanJob(jobId: string): Promise<void> {
           env: { ...process.env, DISABLE_PROMPT_CACHING: "1" },
         }
       : { cwd: repoPath },
-    { kind: "plan", issueId: job.issueId, jobId },
+    { kind: "plan", strategy: CONTEXT_STRATEGY, issueId: job.issueId, jobId },
   );
 
   if (!rawText.trim()) {
@@ -388,8 +387,17 @@ export async function processChatMessage(jobId: string, message: string): Promis
   // resumed session only remembers what Claude itself said before, never
   // these formatting rules, since they were never actually said out loud
   // in an earlier turn.
+  // The resumed session only remembers the plan as it was first written. A
+  // human can since have accepted a revision (it lives in issue.plan, not in
+  // the session), so the current version is restated on every turn. Chat
+  // deliberately still resumes the full session: the earlier conversation
+  // and what was read to write the plan are part of what makes a revision
+  // good.
   const prompt = [
-    message,
+    job.issue.plan
+      ? `The current version of the implementation plan under discussion is below. It may differ from earlier versions in this conversation, because a human can accept revisions. Treat this as the plan.\n<current-plan>\n${job.issue.plan}\n</current-plan>\n\n`
+      : "",
+    `User message:\n${message}`,
     "\n\nIf — and only if — this message genuinely calls for changing the",
     "implementation plan itself (not just answering a question about it),",
     "end your reply with exactly this marker line on its own, followed by",
@@ -401,7 +409,7 @@ export async function processChatMessage(jobId: string, message: string): Promis
   const { text: rawText, sessionId } = await runClaudeQuery(
     prompt,
     { cwd: repoPath, resume: job.issue.claudeSessionId },
-    { kind: "chat", issueId: job.issueId, jobId },
+    { kind: "chat", strategy: "resume", issueId: job.issueId, jobId },
   );
 
   if (!rawText.trim()) {
@@ -494,7 +502,7 @@ export async function processDependencyCheck(jobId: string): Promise<void> {
     const { text: rawText } = await runClaudeQuery(
       prompt,
       { tools: [], allowedTools: [] },
-      { kind: "dependency-check", issueId: job.issueId, jobId },
+      { kind: "dependency-check", strategy: "text-only", issueId: job.issueId, jobId },
     );
 
     const siblingIds = new Set(siblingTickets.map((t) => t.id));
