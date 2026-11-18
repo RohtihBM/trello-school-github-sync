@@ -30,7 +30,10 @@ COPY packages packages
 COPY apps/Backend apps/Backend
 COPY apps/Websockets apps/Websockets
 COPY apps/Worker apps/Worker
-RUN npm run generate --workspace=packages/db
+# prisma.config.ts insists DATABASE_URL exists even though `generate` never
+# connects. A throwaway value for this one step only; the real URL is supplied
+# when the container runs.
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build" npm run generate --workspace=packages/db
 
 ARG APP
 ENV APP=${APP}
