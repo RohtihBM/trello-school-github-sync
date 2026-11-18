@@ -1,0 +1,60 @@
+name: Index code embeddings
+
+# Keeps the vectors in Postgres (pgvector) in step with the code, so the
+# deployed Worker can search them without loading the embedding model's
+# indexing workload (about 1 GB) on a small server. Only chunks whose text is
+# new get embedded, so most runs finish in seconds after the model downloads.
+#
+# Needs a repository secret named DATABASE_URL (the Neon connection string):
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**/*.ts"
+      - "apps/**/*.tsx"
+      - "packages/**/*.ts"
+      - "packages/db/prisma/schema.prisma"
+      - ".github/workflows/index-embeddings.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: index-embeddings
+  cancel-in-progress: false
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - name: Check for the DATABASE_URL secret
+        if: env.DATABASE_URL == ''
+        run: echo "::notice::DATABASE_URL secret is not set, so nothing was indexed. Add it under Settings, Secrets and variables, Actions."
+
+      - uses: actions/checkout@v4
+        if: env.DATABASE_URL != ''
+
+      - uses: actions/setup-node@v4
+        if: env.DATABASE_URL != ''
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        if: env.DATABASE_URL != ''
+        run: npm install --no-audit --no-fund
+
+      - name: Generate the Prisma client
+        if: env.DATABASE_URL != ''
+        run: npm run generate --workspace=packages/db
+
+      - name: Embed new code chunks and prune stale ones
+        if: env.DATABASE_URL != ''
+        working-directory: apps/Worker
+        env:
+          REPO_PATH: ${{ github.workspace }}
+          PRUNE: "1"
+        run: npx tsx src/scripts/indexRepo.ts

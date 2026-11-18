@@ -6,6 +6,11 @@ services:
     buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Backend
     startCommand: npm run start --workspace=apps/Backend
     envVars:
+      # The embedding library is an optional dependency of the Worker, so every
+      # service's root install pulls it in. On Linux x64 its install script
+      # would otherwise download several hundred MB of CUDA binaries.
+      - key: ONNXRUNTIME_NODE_INSTALL
+        value: skip
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
@@ -36,6 +41,11 @@ services:
     buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Websockets
     startCommand: npm run start --workspace=apps/Websockets
     envVars:
+      # The embedding library is an optional dependency of the Worker, so every
+      # service's root install pulls it in. On Linux x64 its install script
+      # would otherwise download several hundred MB of CUDA binaries.
+      - key: ONNXRUNTIME_NODE_INSTALL
+        value: skip
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
@@ -57,6 +67,11 @@ services:
     buildCommand: rm -rf node_modules apps/*/node_modules packages/*/node_modules && npm install --include=optional && npm run generate --workspace=packages/db && npm run build --workspace=apps/Worker
     startCommand: npm run start --workspace=apps/Worker
     envVars:
+      # The embedding library is an optional dependency of the Worker, so every
+      # service's root install pulls it in. On Linux x64 its install script
+      # would otherwise download several hundred MB of CUDA binaries.
+      - key: ONNXRUNTIME_NODE_INSTALL
+        value: skip
       - key: DATABASE_URL
         sync: false
       - key: INTERNAL_API_SECRET
@@ -66,13 +81,15 @@ services:
       - key: REDIS_URL
         sync: false
       # Retrieval settings (see apps/Worker/src/processPlanJob.ts). The deployed
-      # Worker stays on the default strategy; if CONTEXT_STRATEGY is ever set to
-      # retrieval or auto, these keep it safe on a 512 MB server: keyword
-      # ranking only, and never load the embedding model to index. The vectors
+      # Worker plans from a bounded slice of the repo chosen by keyword ranking,
+      # and never loads the embedding model to index (a 512 MB server cannot
+      # hold it next to Claude's own process). The vectors
       # are written to Postgres by the GitHub Action in
       # .github/workflows/index-embeddings.yml. Switch RETRIEVAL to "hybrid"
       # only after checking the Worker's memory on Render with the model loaded
       # (about 340 MB peak on a Mac for the read-only path).
+      - key: CONTEXT_STRATEGY
+        value: retrieval
       - key: RETRIEVAL
         value: keyword
       - key: EMBED_MISSING

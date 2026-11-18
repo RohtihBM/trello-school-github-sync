@@ -102,6 +102,19 @@ Still open before the deployed app can use hybrid retrieval:
 - **Memory on Render's 512 MB free tier is unconfirmed.** 341 MB covers retrieval only; the Claude process runs alongside it. `render.yaml` therefore sets `RETRIEVAL=keyword` and `EMBED_MISSING=false`. A hosted embedding API for the query, or a larger instance, are the alternatives.
 - **Plans are slower than `full` in these tests** (72 s here, 45 s average earlier, against 24 s); the cause is not understood.
 
+### Keyword-only retrieval, end to end (what the deployed Worker uses)
+
+Same 4 tickets, one run each, `RETRIEVAL=keyword` (no embeddings at all), $0.275 in total:
+
+| Per plan, average of 4 | `retrieval`, keyword only | `retrieval`, hybrid |
+|---|---|---|
+| Cost | $0.069 | $0.065 |
+| Time | 50 s | 45 s |
+| Plan file list matches answer key (strict) | 89% | 90% |
+| Answer-key files mentioned anywhere | 95% | 95% |
+
+On this sample the embeddings improved which files were *shown* offline (93% to 100% recall) but made no measurable difference to the finished plans. The deployed Worker is therefore set to `CONTEXT_STRATEGY=retrieval` with `RETRIEVAL=keyword`, which runs inside Render's 512 MB. Four tickets and one run each is thin evidence either way.
+
 ### Retrieval experiment (branch `experiment/context-retrieval`, not on main)
 
 Chunking, a local embedding model, rank fusion and a "map plus selected code" mode, measured offline on 10 tickets labelled by hand (`docs/eval/retrieval-tickets.json` on that branch; the labels are my own judgement and should be reviewed):
