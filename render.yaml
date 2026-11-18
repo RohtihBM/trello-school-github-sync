@@ -65,6 +65,18 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      # Retrieval settings (see apps/Worker/src/processPlanJob.ts). The deployed
+      # Worker stays on the default strategy; if CONTEXT_STRATEGY is ever set to
+      # retrieval or auto, these keep it safe on a 512 MB server: keyword
+      # ranking only, and never load the embedding model to index. The vectors
+      # are written to Postgres by the GitHub Action in
+      # .github/workflows/index-embeddings.yml. Switch RETRIEVAL to "hybrid"
+      # only after checking the Worker's memory on Render with the model loaded
+      # (about 340 MB peak on a Mac for the read-only path).
+      - key: RETRIEVAL
+        value: keyword
+      - key: EMBED_MISSING
+        value: "false"
       # The real, metered API key — this is what makes the deployed Worker
       # actually call Claude, since it has no local Claude Code CLI login
       # to fall back on. Never set this in a LOCAL .env — see the project

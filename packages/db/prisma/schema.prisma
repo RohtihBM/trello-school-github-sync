@@ -291,3 +291,19 @@ model AiRunMetric {
   @@index([kind, createdAt])
   @@index([issueId])
 }
+
+// One row per code chunk the retrieval search can find. The key is a hash of
+// the embedding model's name plus the chunk's path and text, so unchanged code
+// is never embedded twice and a chunk that moved lines still matches. `model`
+// is stored so vectors from different models are never compared. The chunk's
+// text is NOT stored: the Worker already has a checkout of the repo.
+// Prisma cannot read or write the vector column through its typed client, so
+// apps/Worker/src/vectorStore.ts uses raw SQL for this table.
+model CodeChunkEmbedding {
+  hash      String   @id
+  model     String
+  embedding Unsupported("vector(384)")
+  createdAt DateTime @default(now())
+
+  @@index([model])
+}

@@ -76,6 +76,32 @@ Total spend for the eight plans: $0.84.
 - **Caveats:** 4 tickets, 1 run each; the answer key was labelled by me; retrieval ran with the local embedding model (about 1 GB of memory while indexing), which Render's free tier cannot hold. The keyword-only mode, which can run there, has not been run end to end.
 - **Unexplained:** retrieval was slower per plan despite a smaller prompt.
 
+### Vectors in Neon (pgvector), 2026-11-18, branch `feature/bounded-retrieval`
+
+How the embedding side works now:
+
+1. **Chunk:** each source file is split at function and component boundaries; each chunk gets a fingerprint, `sha1(model name + path + text)`.
+2. **Store:** vectors (384 numbers each, from `Xenova/bge-small-en-v1.5`, run locally) live in the `CodeChunkEmbedding` table in Neon. The table holds the fingerprint, the model name and the vector, not the text. The migration also enables the `vector` extension.
+3. **Index:** `apps/Worker/src/scripts/indexRepo.ts` embeds only fingerprints Neon does not have yet, and with `PRUNE=1` deletes vectors nothing refers to. The GitHub Action `.github/workflows/index-embeddings.yml` runs it on every push to `main` that touches code.
+4. **Search:** the ticket text is embedded and Postgres ranks stored vectors by cosine distance (`<=>`), limited to the chunks in the current checkout. The result is fused with the keyword ranking by reciprocal rank fusion.
+5. **Fallback:** if vectors are missing or the model cannot load, the Worker uses keyword ranking only. `EMBED_MISSING=false` makes a small server only read vectors and never embed chunks itself.
+
+Measured:
+
+| Check | Result |
+|---|---|
+| First index of the repo | 279 chunks embedded and stored in 22 s |
+| Index run again straight away | 0 chunks embedded, 0.8 s |
+| Retrieval recall, 10 labelled tickets, Neon vector search, 40K / 20K budget | vector 100% / 93%, hybrid 100% / 91%, chunk keyword 93% / 72%, whole-file keyword 68% / 48% (the repo grew since the first measurement, so keyword figures shifted slightly) |
+| One real plan through the queue (hybrid, read-only vectors, `retrieval` strategy) | 1 request, $0.082, 72 s, all 5 named files exist, no fallback to keyword |
+| Memory of the read-only hybrid path (embed one query, read vectors) | 341 MB peak on a Mac, against a 99 MB bare Node baseline (single measurement) |
+
+Still open before the deployed app can use hybrid retrieval:
+
+- **A repository secret `DATABASE_URL`** must be added in GitHub (Settings, Secrets and variables, Actions) for the workflow to reach Neon. The workflow has not run yet, so its YAML and the CI install are untested.
+- **Memory on Render's 512 MB free tier is unconfirmed.** 341 MB covers retrieval only; the Claude process runs alongside it. `render.yaml` therefore sets `RETRIEVAL=keyword` and `EMBED_MISSING=false`. A hosted embedding API for the query, or a larger instance, are the alternatives.
+- **Plans are slower than `full` in these tests** (72 s here, 45 s average earlier, against 24 s); the cause is not understood.
+
 ### Retrieval experiment (branch `experiment/context-retrieval`, not on main)
 
 Chunking, a local embedding model, rank fusion and a "map plus selected code" mode, measured offline on 10 tickets labelled by hand (`docs/eval/retrieval-tickets.json` on that branch; the labels are my own judgement and should be reviewed):

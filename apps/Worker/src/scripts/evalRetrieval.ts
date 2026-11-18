@@ -8,7 +8,7 @@ import {
   selectChunks,
   type Chunk,
 } from "../chunks.js";
-import { embedChunks, embedQuery, vectorRanking } from "../embeddings.js";
+import { ensureEmbedded, vectorRanking } from "../embeddings.js";
 import {
   loadSourceFiles,
   rankFiles,
@@ -37,7 +37,6 @@ interface Selected {
 interface Context {
   files: SourceFile[];
   chunks: Chunk[];
-  vectors: Map<string, number[]>;
 }
 type Strategy = (ctx: Context, ticketText: string, budget: number) => Promise<Selected[]> | Selected[];
 
@@ -53,13 +52,13 @@ const strategies: Record<string, Strategy> = {
       tokens: c.tokens,
     })),
   "chunk vector": async (ctx, text, budget) => {
-    const ranking = vectorRanking(await embedQuery(text), ctx.vectors);
+    const ranking = await vectorRanking(text, ctx.chunks);
     const scores = new Map(ranking.map((k, i) => [k, 1 / (i + 1)]));
     return selectChunks(ctx.chunks, scores, budget).map((c) => ({ path: c.path, tokens: c.tokens }));
   },
   "chunk hybrid": async (ctx, text, budget) => {
     const keyword = rankingFromScores(rankChunks(ctx.chunks, ctx.files, text));
-    const vector = vectorRanking(await embedQuery(text), ctx.vectors);
+    const vector = await vectorRanking(text, ctx.chunks);
     const fused = fuseRankings([keyword, vector]);
     return selectChunks(ctx.chunks, fused, budget).map((c) => ({ path: c.path, tokens: c.tokens }));
   },
@@ -79,10 +78,10 @@ async function main() {
   const known = new Set(files.map((f) => f.path));
   const chunks = chunkFiles(files);
   const started = Date.now();
-  const { vectors, embeddedNow } = await embedChunks(repoPath, chunks);
-  const ctx: Context = { files, chunks, vectors };
+  const report = await ensureEmbedded(chunks, true);
+  const ctx: Context = { files, chunks };
   console.log(
-    `repo: ${files.length} files, ${chunks.length} chunks, ${tickets.length} tickets; embedded ${embeddedNow} new chunks in ${((Date.now() - started) / 1000).toFixed(1)}s\n`,
+    `repo: ${files.length} files, ${chunks.length} chunks (${report.uniqueChunks} unique), ${tickets.length} tickets; already in Postgres: ${report.alreadyStored}, embedded now: ${report.embeddedNow} in ${((Date.now() - started) / 1000).toFixed(1)}s\n`,
   );
 
   const only = process.env.ONLY?.split(",");

@@ -11,7 +11,7 @@ import {
   rankingFromScores,
   selectChunks,
 } from "./chunks.js";
-import { embedChunks, embedQuery, vectorRanking } from "./embeddings.js";
+import { ensureEmbedded, vectorRanking } from "./embeddings.js";
 import { notifyBoard } from "./notifyBoard.js";
 import { findOverlappingIssues } from "./fileOverlap.js";
 import { wouldCreateCycle } from "./cycleCheck.js";
@@ -157,6 +157,10 @@ const MAP_MAX_TOKENS = intFromEnv("MAP_MAX_TOKENS", 12_000);
 // while indexing; if it cannot load it falls back to keyword. "keyword" runs
 // anywhere.
 const RETRIEVAL_MODE: "keyword" | "hybrid" = process.env.RETRIEVAL === "keyword" ? "keyword" : "hybrid";
+// Whether this machine may load the embedding model to fill in missing
+// vectors. Set EMBED_MISSING=false on a small server: the GitHub Action
+// indexer is what keeps the stored vectors up to date.
+const ALLOW_EMBEDDING = process.env.EMBED_MISSING !== "false";
 
 // Used by every non-default strategy, matching what was measured: the code is
 // in the message, so there is nothing to explore.
@@ -468,8 +472,14 @@ export async function generatePlan(input: PlanInput): Promise<PlanResult> {
   let scores = rankChunks(chunks, allFiles, ticketText);
   if (RETRIEVAL_MODE === "hybrid") {
     try {
-      const { vectors } = await embedChunks(repoPath, chunks);
-      const vector = vectorRanking(await embedQuery(ticketText), vectors);
+      // Vectors live in Postgres (pgvector). A machine allowed to embed fills
+      // in any that are missing; a small server (EMBED_MISSING=false) only
+      // reads what the indexer already stored.
+      const report = await ensureEmbedded(chunks, ALLOW_EMBEDDING);
+      if (report.missing > report.embeddedNow) {
+        console.warn(`${report.missing - report.embeddedNow} chunks have no stored vector yet; keyword ranking covers them`);
+      }
+      const vector = await vectorRanking(ticketText, chunks);
       scores = fuseRankings([rankingFromScores(scores), vector]);
     } catch (err) {
       console.error("embedding retrieval unavailable, using keyword only:", err);

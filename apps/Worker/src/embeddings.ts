@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Chunk } from "./chunks.js";
+import { existingHashes, saveVectors, searchSimilar } from "./vectorStore.js";
 
 // A small general-purpose embedding model that runs inside this process: no
 // account, no API key and no per-call cost. 384 dimensions. Not code
 // specific, which is the trade-off against a hosted code model.
-const MODEL = "Xenova/bge-small-en-v1.5";
+export const EMBEDDING_MODEL = "Xenova/bge-small-en-v1.5";
 const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
 const BATCH_SIZE = 16;
 
@@ -24,7 +22,7 @@ async function getExtractor(): Promise<Extractor> {
   if (!extractorPromise) {
     extractorPromise = (async () => {
       const { pipeline } = await import("@huggingface/transformers");
-      return (await pipeline("feature-extraction", MODEL, { dtype: "q8" })) as unknown as Extractor;
+      return (await pipeline("feature-extraction", EMBEDDING_MODEL, { dtype: "q8" })) as unknown as Extractor;
     })();
   }
   return extractorPromise;
@@ -47,66 +45,66 @@ function chunkText(chunk: Chunk): string {
   return `${chunk.path}\n${chunk.content}`;
 }
 
-function contentKey(chunk: Chunk): string {
-  return createHash("sha1").update(MODEL).update("\0").update(chunkText(chunk)).digest("hex");
+// The fingerprint a vector is stored under: it changes when the model or the
+// chunk's path or text changes, and not when the chunk merely moves lines.
+export function chunkHash(chunk: Chunk): string {
+  return createHash("sha1").update(EMBEDDING_MODEL).update("\0").update(chunkText(chunk)).digest("hex");
 }
 
-type Cache = Record<string, number[]>;
-
-function cachePath(repoPath: string): string {
-  return path.resolve(repoPath, "..", "embeddings-cache.json");
+export interface EmbedReport {
+  chunks: number;
+  uniqueChunks: number;
+  alreadyStored: number;
+  missing: number;
+  embeddedNow: number;
 }
 
-function loadCache(repoPath: string): Cache {
-  const file = cachePath(repoPath);
-  if (!existsSync(file)) return {};
-  try {
-    return JSON.parse(readFileSync(file, "utf8")) as Cache;
-  } catch {
-    return {};
-  }
-}
+// Makes sure every chunk has a vector in Postgres. With allowEmbedding false
+// (a small server) it only reports what is missing and never loads the model.
+export async function ensureEmbedded(chunks: Chunk[], allowEmbedding: boolean): Promise<EmbedReport> {
+  const byHash = new Map<string, Chunk>();
+  for (const c of chunks) byHash.set(chunkHash(c), c);
 
-// Returns one vector per chunk. Only chunks whose text has not been embedded
-// before (by content hash) cost any work, so after the first run a push that
-// changes two files re-embeds only the chunks inside those two files.
-export async function embedChunks(
-  repoPath: string,
-  chunks: Chunk[],
-): Promise<{ vectors: Map<string, number[]>; embeddedNow: number }> {
-  const cache = loadCache(repoPath);
-  const missing = chunks.filter((c) => !cache[contentKey(c)]);
+  const have = await existingHashes([...byHash.keys()], EMBEDDING_MODEL);
+  const missing = [...byHash.entries()].filter(([hash]) => !have.has(hash));
 
-  if (missing.length > 0) {
-    const fresh = await embedTexts(missing.map(chunkText), "passage");
-    missing.forEach((c, i) => {
-      cache[contentKey(c)] = (fresh[i] ?? []).map((n) => Math.round(n * 1e5) / 1e5);
-    });
-    await mkdir(path.dirname(cachePath(repoPath)), { recursive: true });
-    await writeFile(cachePath(repoPath), JSON.stringify(cache));
+  let embeddedNow = 0;
+  if (allowEmbedding && missing.length > 0) {
+    const GROUP = 64;
+    for (let i = 0; i < missing.length; i += GROUP) {
+      const group = missing.slice(i, i + GROUP);
+      const vectors = await embedTexts(group.map(([, c]) => chunkText(c)), "passage");
+      await saveVectors(
+        EMBEDDING_MODEL,
+        group.map(([hash], j) => ({ hash, vector: vectors[j] ?? [] })).filter((r) => r.vector.length > 0),
+      );
+      embeddedNow += group.length;
+    }
   }
 
-  const vectors = new Map<string, number[]>();
-  for (const c of chunks) vectors.set(c.key, cache[contentKey(c)] ?? []);
-  return { vectors, embeddedNow: missing.length };
-}
-
-// Vectors are normalised, so the dot product is the cosine similarity.
-export function vectorRanking(queryVector: number[], vectors: Map<string, number[]>, topK = 80): string[] {
-  const scored: Array<[string, number]> = [];
-  for (const [key, v] of vectors) {
-    if (v.length !== queryVector.length) continue;
-    let dot = 0;
-    for (let i = 0; i < v.length; i++) dot += (v[i] ?? 0) * (queryVector[i] ?? 0);
-    scored.push([key, dot]);
-  }
-  return scored
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, topK)
-    .map(([k]) => k);
+  return {
+    chunks: chunks.length,
+    uniqueChunks: byHash.size,
+    alreadyStored: have.size,
+    missing: missing.length,
+    embeddedNow,
+  };
 }
 
 export async function embedQuery(text: string): Promise<number[]> {
   const [v] = await embedTexts([text.slice(0, 2000)], "query");
   return v ?? [];
+}
+
+// Chunk keys ranked by similarity to the ticket, best first, using pgvector
+// inside Postgres. Chunks with no stored vector simply do not appear, so the
+// caller's keyword ranking still covers them.
+export async function vectorRanking(queryText: string, chunks: Chunk[], topK = 80): Promise<string[]> {
+  const keysByHash = new Map<string, string[]>();
+  for (const c of chunks) {
+    const h = chunkHash(c);
+    keysByHash.set(h, [...(keysByHash.get(h) ?? []), c.key]);
+  }
+  const best = await searchSimilar(await embedQuery(queryText), [...keysByHash.keys()], EMBEDDING_MODEL, topK);
+  return best.flatMap((h) => keysByHash.get(h) ?? []);
 }
