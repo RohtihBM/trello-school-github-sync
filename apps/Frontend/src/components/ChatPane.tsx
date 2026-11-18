@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import ReactMarkdown from "react-markdown";
-import { Bot, CheckCircle2, Loader2, Sparkles, User } from "lucide-react";
+import { Bot, CheckCircle2, Loader2, SendHorizontal, Sparkles, User } from "lucide-react";
 import type { Issue } from "../lib/api";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { Avatar, AvatarFallback } from "./ui/avatar";
 import { MARKDOWN_COMPONENTS } from "../lib/markdownComponents";
+import { cn } from "../lib/cn";
 
 interface ChatPaneProps {
   issue: Issue;
@@ -106,43 +107,52 @@ export function ChatPane({
 
   if (!issue.plan) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-4 px-6 py-8 text-center">
         {suggestion && suggestedBlocker ? (
-          // The pre-planning gate: Claude found this before writing any
-          // plan, and nothing proceeds until a human addresses it —
-          // confirming or dismissing THIS is what continues the
-          // pipeline (both routes auto-enqueue the real plan generation
-          // once this resolves).
-          <div className="w-full max-w-sm space-y-1.5 rounded-md border border-accent-300 bg-accent-50 p-3 text-left text-xs">
-            <div className="flex items-center gap-1.5 font-semibold text-accent-700">
-              <Bot className="h-3.5 w-3.5" /> Claude found a dependency — resolve this before planning
+          // The pre-planning gate: Claude found this before writing any plan,
+          // and nothing proceeds until a human addresses it — confirming or
+          // dismissing THIS is what continues the pipeline (both routes
+          // auto-enqueue the real plan generation once this resolves).
+          <div className="w-full max-w-md space-y-3 rounded-xl border border-accent-200 bg-accent-50 p-4 text-left">
+            <div className="flex items-center gap-2 text-compact font-semibold text-accent-700">
+              <Bot className="h-4 w-4" /> Claude found a dependency
             </div>
-            <p className="text-accent-700">
-              Depends on <span className="font-medium">{suggestedBlocker.title}</span> — expects:{" "}
-              {suggestion.assumedContract}
+            <p className="text-compact leading-6 text-neutral-700">
+              This ticket looks like it depends on <span className="font-medium text-foreground">{suggestedBlocker.title}</span>,
+              expecting: {suggestion.assumedContract}
             </p>
-            <div className="flex gap-1.5">
+            <p className="type-meta">Resolve this to continue — planning starts once you decide.</p>
+            <div className="flex flex-wrap gap-2">
               <Button
                 type="button"
-                variant="secondary"
+                variant="primary"
                 size="sm"
                 onClick={() => onAddDependency(suggestion.blockerId, suggestion.assumedContract)}
               >
-                Confirm this dependency
+                Confirm dependency
               </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={onDismissSuggestion}>
-                Not a real dependency — continue planning
+              <Button type="button" variant="secondary" size="sm" onClick={onDismissSuggestion}>
+                Not a dependency — continue
               </Button>
             </div>
           </div>
         ) : (
           <>
-            <p className="text-xs text-muted-foreground">
-              Generate a plan to start the conversation.
-            </p>
-            <Button variant="primary" disabled={pending} onClick={onGeneratePlan}>
-              {pending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {pending ? "Generating..." : (
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent-50 text-accent-600">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div className="max-w-xs space-y-1">
+              <p className="type-heading">No plan yet</p>
+              <p className="type-body text-neutral-500">
+                Claude will read this ticket and your repository, then draft an implementation plan you can discuss and approve.
+              </p>
+            </div>
+            <Button variant="accent" disabled={pending} onClick={onGeneratePlan}>
+              {pending ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating…
+                </>
+              ) : (
                 <>
                   <Sparkles className="h-3.5 w-3.5" /> Generate plan
                 </>
@@ -150,7 +160,11 @@ export function ChatPane({
             </Button>
           </>
         )}
-        {errorMessage && <p className="text-xs text-danger-600">{errorMessage}</p>}
+        {errorMessage && (
+          <p role="alert" className="text-compact text-danger-700">
+            {errorMessage}
+          </p>
+        )}
       </div>
     );
   }
@@ -161,58 +175,58 @@ export function ChatPane({
         role="region"
         tabIndex={0}
         aria-label="Chat messages, scrollable"
-        className="flex-1 space-y-2 overflow-y-auto p-3"
+        className="flex-1 space-y-4 overflow-y-auto px-5 py-3 sm:px-6"
       >
-        <div className="flex items-start gap-2">
-          <Avatar className="bg-neutral-200 text-neutral-700">
+        <div className="flex items-start gap-3">
+          <Avatar className="mt-0.5 h-6 w-6 bg-accent-100 text-accent-700">
             <AvatarFallback>
-              <Bot className="h-3 w-3" />
+              <Bot className="h-3.5 w-3.5" />
             </AvatarFallback>
           </Avatar>
-          <div className="max-w-[85%] min-w-0 space-y-2">
-            <div className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs">
-              <span className="sr-only">Claude: </span>
-              <ReactMarkdown components={MARKDOWN_COMPONENTS}>{issue.plan}</ReactMarkdown>
-            </div>
+          <div className="min-w-0 flex-1 rounded-xl bg-surface px-5 py-4 text-[0.875rem] text-neutral-700 shadow-raise ring-1 ring-border">
+            <span className="sr-only">Claude: </span>
+            <p className="mb-2 flex items-center gap-1.5 type-eyebrow text-accent-700">
+              <Sparkles aria-hidden className="h-3 w-3" /> Implementation plan
+            </p>
+            <ReactMarkdown components={MARKDOWN_COMPONENTS}>{issue.plan}</ReactMarkdown>
           </div>
         </div>
 
         {issue.planMessages.length === 0 && (
-          <p className="p-2 text-xs text-muted-foreground">
-            Ask Claude anything about this plan.
-          </p>
+          <p className="py-2 text-center type-meta">Ask Claude anything about this plan.</p>
         )}
         {issue.planMessages.map((m) => (
-          <div
-            key={m.id}
-            className={`flex items-start gap-2 ${m.role === "user" ? "flex-row-reverse" : ""}`}
-          >
+          <div key={m.id} className={cn("flex items-start gap-3", m.role === "user" && "flex-row-reverse")}>
             <Avatar
-              className={m.role === "user" ? "bg-accent-100 text-accent-700" : "bg-neutral-200 text-neutral-700"}
+              className={cn(
+                "mt-0.5 h-6 w-6",
+                m.role === "user" ? "bg-neutral-200 text-neutral-700" : "bg-accent-100 text-accent-700",
+              )}
             >
               <AvatarFallback>
-                {m.role === "user" ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}
+                {m.role === "user" ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
               </AvatarFallback>
             </Avatar>
             <div
-              className={`max-w-[80%] rounded-lg px-2.5 py-1.5 text-xs ${
-                m.role === "user" ? "bg-accent-600 text-white" : "bg-surface border border-border text-foreground"
-              }`}
+              className={cn(
+                "min-w-0 max-w-[85%] rounded-xl px-3.5 py-2.5 text-compact",
+                m.role === "user"
+                  ? "bg-neutral-900 text-neutral-50"
+                  : "border border-border bg-surface text-neutral-700",
+              )}
             >
-              {/* Role conveyed by side + icon color alone visually — restored
-                  non-visually for screen readers, same fix as before. */}
+              {/* Role conveyed by side + colour visually — restored for
+                  screen readers. */}
               <span className="sr-only">{m.role === "user" ? "You: " : "Claude: "}</span>
-              {/* Markdown for assistant replies, not plain whitespace-pre-wrap
-                  — found directly: a real reply used **bold** markdown syntax
-                  that was rendering as literal asterisks before this fix.
-                  User messages stay plain text, since nobody types markdown
-                  into a chat box intending it to render. */}
+              {/* Markdown for assistant replies; user messages stay plain
+                  text, since nobody types markdown into a chat box intending
+                  it to render. */}
               {m.role === "assistant" ? (
                 <ReactMarkdown components={MARKDOWN_COMPONENTS}>{m.content}</ReactMarkdown>
               ) : (
-                <p className="whitespace-pre-wrap">{m.content}</p>
+                <p className="whitespace-pre-wrap leading-6">{m.content}</p>
               )}
-              <p className={`mt-0.5 text-[0.65rem] ${m.role === "user" ? "text-accent-100" : "text-muted-foreground"}`}>
+              <p className={cn("mt-1 text-xs tabular-nums", m.role === "user" ? "text-neutral-400" : "text-neutral-400")}>
                 {formatTime(m.createdAt)}
               </p>
             </div>
@@ -220,64 +234,53 @@ export function ChatPane({
         ))}
 
         {/* A real "Claude is thinking" bubble, not just the small spinner
-            already inside the Send button — found directly: that spinner
-            is easy to miss entirely, especially once the composer itself
-            is out of view while scrolled up reading a long reply. pending
-            here only ever means "waiting on a chat reply" (plan
-            generation's own pending state is handled by the Generate
-            button, in the branch above where no plan exists yet), so this
-            is unambiguous. */}
+            inside the Send button — that one is easy to miss once the
+            composer is out of view. pending here only ever means "waiting on
+            a chat reply" (plan generation's own pending state is handled by
+            the Generate button above). */}
         {pending && (
-          <div className="flex items-start gap-2">
-            <Avatar className="bg-neutral-200 text-neutral-700">
+          <div className="flex items-start gap-3" role="status">
+            <Avatar className="mt-0.5 h-6 w-6 bg-accent-100 text-accent-700">
               <AvatarFallback>
-                <Bot className="h-3 w-3" />
+                <Bot className="h-3.5 w-3.5" />
               </AvatarFallback>
             </Avatar>
-            <div className="flex items-center gap-1 rounded-lg border border-border bg-surface px-3 py-2.5">
+            <div className="flex items-center gap-1 rounded-xl border border-border bg-surface px-3.5 py-3.5">
               <span className="sr-only">Claude is thinking</span>
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
-              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-neutral-400" />
             </div>
           </div>
         )}
         <div ref={bottomRef} />
       </div>
 
-      {/* Moved here from directly under the plan message — found
-          directly: once a conversation grows past one screen, that
-          message scrolls out of view and there's no way to approve (or
-          now, resolve a proposed revision) without scrolling back up to
-          it. This sits right above the composer instead, so it's always
-          on screen alongside the rest of the thread, no scrolling
-          needed, and it always reflects the CURRENT state: a revision
-          banner if one's pending, otherwise approve/approved for
-          whatever `issue.plan` currently holds (the original text, or
-          the most recently accepted revision — there's no other copy of
-          "the plan" anywhere else for this to go stale against). */}
-      <div className="shrink-0 border-t border-border p-2">
+      {/* Sits right above the composer so it's always on screen alongside the
+          thread: a revision banner if one's pending, otherwise
+          approve/approved for whatever `issue.plan` currently holds. */}
+      <div className="shrink-0 border-t border-border bg-background px-5 py-3 sm:px-6">
         {issue.proposedPlan ? (
-          <div className="space-y-1.5 rounded-lg border border-accent-300 bg-accent-50 p-2 text-xs">
+          <div className="space-y-2.5 rounded-xl border border-accent-200 bg-accent-50 p-3 text-compact">
             <div className="flex items-center gap-1.5 font-semibold text-accent-700">
-              <Bot className="h-3.5 w-3.5" /> Claude proposed an updated plan
+              <Bot className="h-4 w-4" /> Claude proposed an updated plan
             </div>
-            <div className="max-h-28 overflow-y-auto rounded-md border border-accent-200 bg-surface p-1.5">
+            <div className="max-h-32 overflow-y-auto rounded-lg border border-accent-200 bg-surface p-2.5 text-neutral-700">
               <ReactMarkdown components={MARKDOWN_COMPONENTS}>{issue.proposedPlan}</ReactMarkdown>
             </div>
-            <div className="flex gap-1.5">
-              <Button type="button" variant="primary" size="sm" onClick={onAcceptRevision}>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="accent" size="sm" onClick={onAcceptRevision}>
                 <CheckCircle2 className="h-3.5 w-3.5" /> Accept revision
               </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={onRejectRevision}>
+              <Button type="button" variant="secondary" size="sm" onClick={onRejectRevision}>
                 Keep current plan
               </Button>
             </div>
           </div>
         ) : issue.status === "READY" || issue.status === "DONE" ? (
-          <div className="flex items-center gap-2 rounded-lg border border-success-600/30 bg-success-50 p-2 text-xs">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-success-700" />
-            <div className="min-w-0">
+          <div className="flex items-center gap-3 rounded-xl border border-success-500/30 bg-success-50 p-3">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-success-600" />
+            <div className="min-w-0 text-compact">
               <p className="font-semibold text-success-700">Plan approved</p>
               <p className="text-success-700/80">
                 {issue.status === "DONE"
@@ -287,42 +290,50 @@ export function ChatPane({
             </div>
           </div>
         ) : (
-          <div className="space-y-1.5 rounded-lg border border-border bg-surface p-2">
-            <p className="text-xs text-muted-foreground">
-              Approving locks this exact plan and is required before the ticket can be
-              moved to Completed.
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-xs leading-5 text-neutral-500 sm:max-w-sm">
+              Approving locks this exact plan. It's required before the ticket can move to Completed.
             </p>
-            <Button variant="primary" size="sm" onClick={onApprove} className="w-full">
+            <Button variant="primary" size="sm" onClick={onApprove} className="shrink-0">
               <CheckCircle2 className="h-3.5 w-3.5" /> Approve plan
             </Button>
           </div>
         )}
       </div>
 
-      {errorMessage && <p className="px-3 pb-1 text-xs text-danger-600">{errorMessage}</p>}
+      {errorMessage && (
+        <p role="alert" className="px-5 pb-1 text-compact text-danger-700 sm:px-6">
+          {errorMessage}
+        </p>
+      )}
 
-      {/* shrink-0 makes "fixed at the bottom" explicit rather than relying
-          on default flex behavior — the messages list above is the only
-          thing that should ever give up space to scrolling, never this. */}
-      <form onSubmit={handleSubmit} className="flex shrink-0 items-end gap-1.5 border-t border-border p-3">
-        <Textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onInput={handleInput}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            issue.proposedPlan
-              ? "Resolve the proposed revision above to keep chatting"
-              : "Ask about this plan... (Shift+Enter for a new line)"
-          }
-          disabled={chatBlocked}
-          rows={1}
-          className="max-h-32 min-h-8 overflow-y-auto py-1.5 text-xs leading-relaxed"
-        />
-        <Button type="submit" variant="secondary" size="sm" disabled={chatBlocked}>
-          {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Send"}
-        </Button>
+      {/* shrink-0 makes "fixed at the bottom" explicit — the messages list
+          above is the only thing that should ever give up space to
+          scrolling, never this. */}
+      <form onSubmit={handleSubmit} className="shrink-0 border-t border-border px-5 py-3 sm:px-6">
+        <div className="flex items-end gap-2">
+          <Textarea
+            ref={textareaRef}
+            aria-label="Message Claude about this plan"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onInput={handleInput}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              issue.proposedPlan
+                ? "Resolve the proposed revision above to keep chatting"
+                : "Ask Claude about this plan…"
+            }
+            disabled={chatBlocked}
+            rows={1}
+            className="max-h-32 min-h-9 overflow-y-auto py-2 text-compact leading-5"
+          />
+          <Button type="submit" variant="primary" size="md" disabled={chatBlocked || draft.trim() === ""} aria-label="Send message">
+            {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <SendHorizontal className="h-3.5 w-3.5" />}
+            Send
+          </Button>
+        </div>
+        <p className="mt-1.5 hidden text-xs text-neutral-400 sm:block">Enter to send · Shift+Enter for a new line</p>
       </form>
     </div>
   );

@@ -1,15 +1,13 @@
 @import "tailwindcss";
 
-/* Self-hosted, explicit @font-face — no runtime request to Google, no
+/* Self-hosted, explicit @font-face — no runtime request to a font CDN, no
    layout shift from a late-loading web font. Deliberately NOT importing
-   @fontsource's own CSS here: its relative url() paths into node_modules
-   didn't survive this monorepo's hoisted node_modules through Vite's
-   asset pipeline (confirmed by inspecting the actual `dist` build output
-   — zero font files were emitted, meaning production would have silently
-   fallen back to the system font with no visible error). The .woff2
-   files themselves are copied into public/fonts/ instead, referenced
-   here by an absolute path Vite never needs to resolve or rewrite.
-   Latin subset only — this app has no i18n beyond English. */
+   @fontsource's own CSS: its relative url() paths into node_modules did not
+   survive this monorepo's hoisted node_modules through Vite's asset pipeline
+   (zero font files were emitted, so production silently fell back to the
+   system font). The .woff2 files live in public/fonts and are referenced by
+   an absolute path Vite never has to resolve or rewrite. Latin subset only —
+   this app has no i18n beyond English. */
 @font-face {
   font-family: "Geist Sans";
   src: url("/fonts/geist-sans-latin-400-normal.woff2") format("woff2");
@@ -53,79 +51,311 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/instrument-serif-latin-400-normal.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Serif";
+  src: url("/fonts/instrument-serif-latin-400-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 @theme {
+  /* The one size between body (14px) and meta (12px) that the UI uses a lot. */
+  --text-compact: 0.8125rem;
+
   --font-sans: "Geist Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
+  /* Display face for titles and numerals. One weight (400) only — never
+     bold it, the browser would synthesise a poor one. */
+  --font-display: "Instrument Serif", ui-serif, Georgia, serif;
 
-  /* The ONLY grays used anywhere in this app from here on — every
-     component reads these, never Tailwind's default slate/gray/zinc
-     directly, so the whole UI stays one consistent neutral scale
-     instead of three different grays picked ad hoc per component (the
-     actual state of the app before this phase). */
-  --color-neutral-50: oklch(98.5% 0 0);
-  --color-neutral-100: oklch(97% 0 0);
-  --color-neutral-200: oklch(93% 0 0);
-  --color-neutral-300: oklch(87% 0 0);
-  --color-neutral-400: oklch(70% 0 0);
-  --color-neutral-500: oklch(55% 0 0);
-  --color-neutral-600: oklch(44% 0 0);
-  --color-neutral-700: oklch(35% 0 0);
-  --color-neutral-800: oklch(24% 0 0);
-  --color-neutral-900: oklch(16% 0 0);
-  --color-neutral-950: oklch(10% 0 0);
+  /* PAPER & INK. The neutrals are a warm paper scale (hue ~85) at the light
+     end and a deep green-black ink (hue ~165) at the dark end, so text never
+     reads as a cold default grey and the dark surfaces share the brand's
+     undertone. Everything reads off this one scale. */
+  --color-neutral-50: oklch(98.4% 0.007 88);
+  --color-neutral-100: oklch(96.2% 0.011 87);
+  --color-neutral-200: oklch(92.2% 0.014 85);
+  --color-neutral-300: oklch(86% 0.016 84);
+  --color-neutral-400: oklch(72% 0.016 100);
+  --color-neutral-500: oklch(56% 0.018 130);
+  --color-neutral-600: oklch(45% 0.022 150);
+  --color-neutral-700: oklch(36% 0.026 158);
+  --color-neutral-800: oklch(28% 0.03 162);
+  --color-neutral-900: oklch(21% 0.03 165);
+  --color-neutral-950: oklch(15.5% 0.026 168);
 
-  /* One accent, used sparingly (plan rule #1) — primary actions and
-     active/focus states only. Deliberately not blue — flat indigo
-     reads as a real product's chosen brand color, not the default
-     "AI SaaS gradient" blue-to-purple. No gradients anywhere. */
-  --color-accent-50: oklch(96% 0.025 275);
-  --color-accent-100: oklch(91% 0.05 275);
-  --color-accent-200: oklch(84% 0.08 275);
-  --color-accent-500: oklch(55% 0.18 275);
-  --color-accent-600: oklch(48% 0.19 275);
-  --color-accent-700: oklch(40% 0.18 275);
+  /* CLAY — the single signal colour. It means "Claude is involved": the
+     plan, the proposal, work in progress. Nothing else is clay, so the eye
+     learns it. (Not violet, not default blue.) */
+  --color-accent-50: oklch(97% 0.018 62);
+  --color-accent-100: oklch(94% 0.04 58);
+  --color-accent-200: oklch(88% 0.075 54);
+  --color-accent-300: oklch(80% 0.115 50);
+  --color-accent-400: oklch(72% 0.145 47);
+  --color-accent-500: oklch(65% 0.158 44);
+  --color-accent-600: oklch(56% 0.15 41);
+  --color-accent-700: oklch(46% 0.12 39);
 
-  /* Status/semantic colors, kept deliberately distinct from the accent
-     above — a ticket's status should never visually compete with "this
-     is a clickable primary action." Used by Badge and status-driven UI
-     (dependency waiting/resolved/mismatch, file-overlap warnings,
-     destructive confirmations). */
-  --color-success-50: oklch(96% 0.03 155);
-  --color-success-100: oklch(93% 0.06 155);
-  --color-success-600: oklch(52% 0.13 155);
-  --color-success-700: oklch(43% 0.12 155);
-  --color-warning-50: oklch(97% 0.035 85);
-  --color-warning-100: oklch(94% 0.07 85);
-  --color-warning-700: oklch(50% 0.12 85);
-  --color-danger-50: oklch(96% 0.03 25);
-  --color-danger-100: oklch(93% 0.06 25);
-  --color-danger-600: oklch(55% 0.19 25);
-  --color-danger-700: oklch(46% 0.18 25);
+  /* Status colours: forest for approved/done, amber for waiting, crimson for
+     blocked/destructive. Distinct from clay in hue AND, in the UI, in glyph. */
+  --color-success-50: oklch(97% 0.022 150);
+  --color-success-100: oklch(93.5% 0.045 150);
+  --color-success-500: oklch(62% 0.13 152);
+  --color-success-600: oklch(50% 0.115 152);
+  --color-success-700: oklch(41% 0.095 152);
+  --color-warning-50: oklch(97.5% 0.035 95);
+  --color-warning-100: oklch(94.5% 0.07 93);
+  --color-warning-500: oklch(76% 0.14 88);
+  --color-warning-700: oklch(46% 0.09 78);
+  --color-danger-50: oklch(97% 0.018 18);
+  --color-danger-100: oklch(93.5% 0.045 18);
+  --color-danger-500: oklch(60% 0.2 22);
+  --color-danger-600: oklch(52% 0.2 22);
+  --color-danger-700: oklch(43% 0.17 22);
 
-  /* Semantic surface tokens. Primitives read THESE, not a raw
-     neutral-N/accent-N — a future re-theme (e.g. dark mode) only ever
-     has to touch this block, never any component file. */
-  --color-background: var(--color-neutral-50);
-  --color-surface: oklch(100% 0 0);
-  --color-border: var(--color-neutral-200);
+  /* Semantic tokens — components read THESE. */
+  --color-background: var(--color-neutral-100);
+  --color-sunken: oklch(94.2% 0.014 85);
+  --color-surface: oklch(99.4% 0.004 88);
+  --color-border: oklch(90.5% 0.014 85);
+  --color-border-strong: oklch(83% 0.018 84);
   --color-foreground: var(--color-neutral-900);
   --color-muted-foreground: var(--color-neutral-500);
+  --color-ink: var(--color-neutral-900);
 
   --radius-sm: 0.25rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --radius-2xl: 1rem;
+
+  /* Warm-tinted, layered shadows (never pure black). Elevation is reserved
+     for things that actually sit above the page; hover "lift" is a small,
+     deliberate step up. */
+  --shadow-raise:
+    0 1px 0 oklch(100% 0 0 / 0.7) inset, 0 1px 2px oklch(21% 0.03 165 / 0.07),
+    0 0 0 1px oklch(21% 0.03 165 / 0.04);
+  --shadow-lift:
+    0 1px 0 oklch(100% 0 0 / 0.7) inset, 0 2px 4px oklch(21% 0.03 165 / 0.05),
+    0 10px 22px -8px oklch(21% 0.03 165 / 0.18), 0 0 0 1px oklch(21% 0.03 165 / 0.06);
+  --shadow-float:
+    0 0 0 1px oklch(21% 0.03 165 / 0.06), 0 4px 8px oklch(21% 0.03 165 / 0.06),
+    0 24px 56px -12px oklch(21% 0.03 165 / 0.32);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --animate-overlay-in: overlay-in 200ms ease-out;
+  --animate-overlay-out: overlay-out 150ms ease-in;
+  --animate-pop-in: pop-in 240ms var(--ease-out-expo);
+  --animate-pop-out: pop-out 140ms ease-in;
+  --animate-sheet-in: sheet-in 380ms var(--ease-out-expo);
+  --animate-sheet-out: sheet-out 220ms cubic-bezier(0.4, 0, 1, 1);
+  --animate-menu-in: menu-in 160ms var(--ease-out-expo);
+  --animate-menu-out: menu-out 110ms ease-in;
+  --animate-toast-in: toast-in 320ms var(--ease-out-expo);
+  --animate-toast-out: toast-out 160ms ease-in;
+  --animate-shimmer: shimmer 1.8s ease-in-out infinite;
+  --animate-draw: draw 1.4s var(--ease-out-expo) both;
+  --animate-rise: rise 520ms var(--ease-out-expo) backwards;
+  --animate-pulse-ring: pulse-ring 2.4s ease-out infinite;
+
+  @keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes overlay-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes pop-in { from { opacity: 0; scale: 0.96; translate: 0 6px; } to { opacity: 1; scale: 1; translate: 0 0; } }
+  @keyframes pop-out { from { opacity: 1; scale: 1; } to { opacity: 0; scale: 0.98; } }
+  @keyframes sheet-in { from { opacity: 0.6; translate: 64px 0; } to { opacity: 1; translate: 0 0; } }
+  @keyframes sheet-out { from { opacity: 1; translate: 0 0; } to { opacity: 0; translate: 48px 0; } }
+  @keyframes menu-in { from { opacity: 0; translate: 0 -6px; scale: 0.97; } to { opacity: 1; translate: 0 0; scale: 1; } }
+  @keyframes menu-out { from { opacity: 1; } to { opacity: 0; scale: 0.98; } }
+  @keyframes toast-in { from { opacity: 0; translate: 0 16px; scale: 0.98; } to { opacity: 1; translate: 0 0; scale: 1; } }
+  @keyframes toast-out { from { opacity: 1; } to { opacity: 0; translate: 10px 0; } }
+  @keyframes shimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+  @keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes rise { from { opacity: 0; translate: 0 10px; } to { opacity: 1; translate: 0 0; } }
+  @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 oklch(65% 0.158 44 / 0.45); } 70%, 100% { box-shadow: 0 0 0 7px oklch(65% 0.158 44 / 0); } }
 }
 
-body {
-  font-family: var(--font-sans);
-  background-color: var(--color-background);
+/* TYPE SCALE — one system, used everywhere. Serif for the moments that
+   deserve to feel written (titles, numerals); sans for everything you read
+   and operate; mono for ids, repos and labels. */
+@utility type-display {
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 5.2vw, 3.75rem);
+  line-height: 1;
+  font-weight: 400;
+  letter-spacing: -0.025em;
   color: var(--color-foreground);
 }
+@utility type-title {
+  font-family: var(--font-display);
+  font-size: 2.125rem;
+  line-height: 2.375rem;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  color: var(--color-foreground);
+}
+@utility type-subtitle {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  line-height: 1.875rem;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  color: var(--color-foreground);
+}
+@utility type-heading {
+  font-size: 0.9375rem;
+  line-height: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-foreground);
+}
+@utility type-body {
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+}
+@utility type-meta {
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: var(--color-muted-foreground);
+}
+@utility type-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+}
+/* Display numerals: tabular so counts don't jitter while they tween. */
+@utility type-numeral {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
 
-/* A real focus-visible ring everywhere, keyboard-only — the current app
-   has zero intentional focus styling (relying on whatever the browser
-   default happens to be, frequently suppressed by a CSS reset). */
-:focus-visible {
-  outline: 2px solid var(--color-accent-500);
-  outline-offset: 2px;
+/* A faint warm light falling from the top-left of a page header, so the
+   paper has depth without a flat grey slab. */
+@utility bg-glow {
+  background-image:
+    radial-gradient(60rem 22rem at 8% -30%, oklch(88% 0.075 54 / 0.28), transparent 70%),
+    radial-gradient(40rem 18rem at 95% -40%, oklch(86% 0.05 150 / 0.16), transparent 70%);
+}
+/* Fine paper grain — barely there, but it stops large fills looking digital. */
+@utility bg-grain {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1  0 0 0 0 0.12  0 0 0 0 0.1  0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='.55'/></svg>");
+  background-size: 160px 160px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    line-height: 1.375rem;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings break evenly instead of leaving one word on the last line, and
+     paragraphs avoid a lone trailing word. */
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  p,
+  li {
+    text-wrap: pretty;
+  }
+
+  ::selection {
+    background: var(--color-accent-200);
+    color: var(--color-neutral-950);
+  }
+
+  /* Keyboard-only focus ring: ink with a paper gap, readable on any surface. */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+
+  button,
+  [role="button"],
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-neutral-300) transparent;
+  }
+}
+
+/* React Flow — restyled to the app's tokens so the graph doesn't look like a
+   library dropped in. */
+.react-flow {
+  --xy-edge-stroke-default: var(--color-neutral-400);
+  --xy-background-color-default: transparent;
+  --xy-controls-button-background-color-default: var(--color-surface);
+  --xy-controls-button-background-color-hover-default: var(--color-neutral-100);
+  --xy-controls-button-color-default: var(--color-neutral-700);
+  --xy-controls-button-border-color-default: var(--color-border);
+  --xy-minimap-background-color-default: var(--color-surface);
+  font-family: var(--font-sans);
+}
+.react-flow__controls {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-raise);
+}
+.react-flow__minimap {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--shadow-raise);
+}
+@media (pointer: coarse) {
+  .react-flow__controls .react-flow__controls-button {
+    width: 40px;
+    height: 40px;
+  }
+}
+.react-flow__attribution {
+  background: transparent !important;
+  color: var(--color-neutral-400);
+}
+.react-flow__attribution a {
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin {
+    animation-duration: 2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }

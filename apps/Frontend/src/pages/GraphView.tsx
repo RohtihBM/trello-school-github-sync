@@ -6,6 +6,7 @@ import {
   Controls,
   MiniMap,
   Handle,
+  Panel,
   Position,
   type Node,
   type Edge,
@@ -13,10 +14,13 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "dagre";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ChevronRight, KanbanSquare, Network, Share2 } from "lucide-react";
 import { api, type TicketStatus } from "../lib/api";
-import { Button } from "../components/ui/button";
-import { Badge, STATUS_BADGE_VARIANT } from "../components/ui/badge";
+import { STATUS_LABEL } from "../components/ui/badge";
+import { EmptyState } from "../components/ui/empty-state";
+import { Skeleton } from "../components/ui/skeleton";
+import { NavTabs } from "../components/NavTabs";
+import { StatusIcon } from "../components/ui/status";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { toast } from "../hooks/use-toast";
 
@@ -33,29 +37,30 @@ interface GraphEdge {
   blockerId: string;
 }
 
-const NODE_WIDTH = 190;
-const NODE_HEIGHT = 56;
+const NODE_WIDTH = 232;
+const NODE_HEIGHT = 66;
 
-// Resolved from the same CSS custom properties every other component
-// reads (index.css's @theme block) — not hardcoded hex, so a node's
-// color here is tied to the exact same source of truth as a Badge
-// anywhere else in the app.
-const STATUS_NODE_STYLE: Record<TicketStatus, { background: string; color: string; borderColor: string }> = {
-  OPEN: { background: "var(--color-neutral-100)", color: "var(--color-neutral-700)", borderColor: "var(--color-neutral-300)" },
-  PLANNING: { background: "var(--color-accent-100)", color: "var(--color-accent-700)", borderColor: "var(--color-accent-200)" },
-  BLOCKED: { background: "var(--color-danger-100)", color: "var(--color-danger-700)", borderColor: "var(--color-danger-600)" },
-  READY: { background: "var(--color-success-100)", color: "var(--color-success-700)", borderColor: "var(--color-success-600)" },
-  DONE: { background: "var(--color-success-100)", color: "var(--color-success-700)", borderColor: "var(--color-success-600)" },
+// Nodes are paper tickets: the state glyph leads and a border tint carries
+// urgency (blocked, ready) so the graph reads at a glance without eight
+// competing fills.
+const STATUS_BORDER: Record<TicketStatus, string> = {
+  OPEN: "var(--color-border-strong)",
+  PLANNING: "var(--color-accent-300)",
+  BLOCKED: "var(--color-danger-500)",
+  READY: "var(--color-success-500)",
+  DONE: "var(--color-border-strong)",
 };
 
 const ALL_STATUSES: TicketStatus[] = ["OPEN", "PLANNING", "BLOCKED", "READY", "DONE"];
 
-interface GraphNodeData {
+// A type alias, not an interface: React Flow requires node data to be assignable to
+// Record<string, unknown>, which an interface is not.
+type GraphNodeData = {
   title: string;
   description: string | null;
   status: TicketStatus;
   dimmed: boolean;
-}
+};
 
 // A custom node (not React Flow's default box) for exactly one reason:
 // the hover detail. The default node renders a plain div with no good
@@ -64,30 +69,26 @@ interface GraphNodeData {
 // instead of a native browser title="" tooltip, which would look like a
 // different, cheaper product bolted on.
 function GraphNode({ data }: NodeProps<Node<GraphNodeData>>) {
-  const colors = STATUS_NODE_STYLE[data.status];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <div
           tabIndex={0}
-          style={{
-            background: colors.background,
-            color: colors.color,
-            borderColor: colors.borderColor,
-            width: NODE_WIDTH,
-            opacity: data.dimmed ? 0.35 : 1,
-          }}
-          className="cursor-pointer rounded-md border px-2.5 py-2 font-sans text-xs transition-opacity"
+          style={{ borderColor: STATUS_BORDER[data.status], width: NODE_WIDTH, opacity: data.dimmed ? 0.3 : 1 }}
+          className="cursor-pointer rounded-xl border bg-surface px-3.5 py-3 font-sans text-foreground shadow-raise transition-[opacity,box-shadow,translate] duration-300 ease-out-expo hover:-translate-y-0.5 hover:shadow-lift"
         >
           <Handle type="target" position={Position.Left} className="bg-neutral-400!" />
-          <p className="truncate font-medium">{data.title}</p>
-          <p className="mt-0.5 text-[0.65rem] opacity-80">{data.status}</p>
+          <div className="flex items-start gap-2.5">
+            <StatusIcon status={data.status} className="mt-px" />
+            <p className="truncate text-compact font-medium leading-5">{data.title}</p>
+          </div>
+          <p className="mt-1.5 pl-[1.625rem] font-mono text-xs uppercase tracking-[0.06em] text-neutral-500">{STATUS_LABEL[data.status]}</p>
           <Handle type="source" position={Position.Right} className="bg-neutral-400!" />
         </div>
       </TooltipTrigger>
-      <TooltipContent className="max-w-60">
+      <TooltipContent className="max-w-64">
         <p className="font-medium">{data.title}</p>
-        <p className="mt-0.5 text-muted-foreground">{data.description ?? "No description"}</p>
+        <p className="mt-0.5 text-neutral-400">{data.description ?? "No description"}</p>
       </TooltipContent>
     </Tooltip>
   );
@@ -243,75 +244,96 @@ export function GraphView() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <header className="border-b border-border bg-surface">
-        {/* flex-wrap: the 5-badge legend doesn't fit alongside the title
-            and back button on a phone-width screen (confirmed by actually
-            measuring document.documentElement.scrollWidth at 375px, not
-            just eyeballing it) — it drops to its own row instead of
-            forcing the whole page to scroll horizontally. */}
-        <div className="flex flex-wrap items-center justify-between gap-y-2 px-6 py-3">
-          <Button variant="ghost" size="sm" asChild>
-            <Link to={`/boards/${boardId}`}>
-              <ArrowLeft className="h-3.5 w-3.5" /> Board
+      <header className="relative z-10 shrink-0 border-b border-border bg-glow">
+        <div className="px-4 pt-5 sm:px-8">
+          <nav aria-label="Breadcrumb" className="type-eyebrow flex items-center gap-1.5">
+            <Link to="/" className="rounded-sm transition-colors hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3">
+              Boards
             </Link>
-          </Button>
-          <h1 className="text-sm font-semibold text-foreground">Dependency graph</h1>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {ALL_STATUSES.map((s) => (
-              <Badge key={s} variant={STATUS_BADGE_VARIANT[s]}>
-                {s}
-              </Badge>
-            ))}
+            <ChevronRight aria-hidden className="h-3 w-3 text-neutral-400" />
+            <Link to={`/boards/${boardId}`} className="rounded-sm transition-colors hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3">
+              Board
+            </Link>
+            <ChevronRight aria-hidden className="h-3 w-3 text-neutral-400" />
+            <span aria-current="page" className="text-neutral-600">
+              Dependencies
+            </span>
+          </nav>
+          <div className="mt-3 space-y-1.5">
+            <h1 className="type-title">Dependency graph</h1>
+            <p className="text-compact text-neutral-500">Hover a ticket to trace what blocks it and what it unblocks. Click to open it.</p>
+          </div>
+          <div className="mt-5">
+            <NavTabs
+              label="Board views"
+              items={[
+                { label: "Board", to: `/boards/${boardId}`, active: false, icon: <KanbanSquare className="h-4 w-4" /> },
+                { label: "Dependency graph", to: `/boards/${boardId}/graph`, active: true, icon: <Network className="h-4 w-4" /> },
+              ]}
+            />
           </div>
         </div>
       </header>
 
-      <main className="flex-1 p-4">
+      <main className="min-h-0 flex-1 bg-sunken">
         {loading && (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading...
+          <div className="flex h-full items-center justify-center gap-6 p-8" aria-busy="true" aria-label="Loading graph">
+            <Skeleton className="h-16 w-56" />
+            <Skeleton className="h-16 w-56" />
+            <Skeleton className="h-16 w-56" />
           </div>
         )}
 
         {!loading && !loadError && nodes.length === 0 && (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-muted-foreground">No tickets on this board yet.</p>
+          <div className="flex h-full items-center justify-center p-6">
+            <EmptyState
+              icon={Share2}
+              title="No tickets to graph yet"
+              description="Once this board has tickets, the dependencies between them are drawn here."
+            />
           </div>
         )}
 
         {!loading && nodes.length > 0 && (
-          <div className="h-full rounded-lg border border-border bg-surface">
+          <div className="h-full">
             <ReactFlow
               nodes={displayNodes}
               edges={displayEdges}
               nodeTypes={NODE_TYPES}
               fitView
+              fitViewOptions={{ padding: 0.3 }}
+              proOptions={{ hideAttribution: false }}
               onNodeClick={(_event, node) => navigate(`/boards/${boardId}?issue=${node.id}`)}
               onNodeMouseEnter={(_event, node) => setHoveredId(node.id)}
               onNodeMouseLeave={() => setHoveredId(null)}
             >
-              <Background color={resolvedColors.neutral300} />
-              <Controls />
-              {/* Hidden below sm — at phone width it's large enough to
-                  visually overlap real node cards underneath it rather
-                  than sit cleanly in a corner, and isn't genuinely
-                  useful for a graph this small on a screen this size.
-
-                  maskColor is deliberately translucent (rgba, not the
-                  resolved neutral-100 token) — found directly, not
-                  guessed: the minimap's mask path was rendering as one
-                  fully opaque rectangle covering the ENTIRE minimap
-                  (its viewport-cutout wasn't actually being carved out
-                  in this xyflow version/graph shape), which painted
-                  over every node color underneath it regardless of
-                  what color was used. Translucency is what keeps nodes
-                  visible through it either way, rather than depending
-                  on a cutout that isn't reliably happening. */}
-              <MiniMap
-                className="hidden sm:block"
-                maskColor="rgba(0, 0, 0, 0.08)"
-                nodeColor={resolvedColors.neutral300}
-              />
+              <Background color={resolvedColors.neutral300} gap={22} size={1.3} />
+              <Controls showInteractive={false} />
+              <Panel position="top-left" className="m-4!">
+                <div aria-label="Graph legend" className="space-y-3 rounded-xl bg-surface/90 p-4 text-xs shadow-raise ring-1 ring-border backdrop-blur">
+                  <p className="type-eyebrow">Status</p>
+                  <ul className="grid grid-cols-2 gap-x-5 gap-y-1.5">
+                    {ALL_STATUSES.map((st) => (
+                      <li key={st} className="flex items-center gap-2 text-neutral-600">
+                        <StatusIcon status={st} className="h-3.5 w-3.5" />
+                        {STATUS_LABEL[st]}
+                      </li>
+                    ))}
+                  </ul>
+                  {/* Hover tracing only exists with a mouse, so the edge key
+                      is hidden on touch screens. */}
+                  <p className="type-eyebrow hidden pt-1 pointer-fine:block">On hover</p>
+                  <ul className="hidden space-y-1.5 pointer-fine:block">
+                    <li className="flex items-center gap-2 text-neutral-600">
+                      <span aria-hidden className="h-0.5 w-5 rounded bg-danger-600" /> Blocks
+                    </li>
+                    <li className="flex items-center gap-2 text-neutral-600">
+                      <span aria-hidden className="h-0.5 w-5 rounded bg-accent-600" /> Blocked by
+                    </li>
+                  </ul>
+                </div>
+              </Panel>
+              <MiniMap className="hidden sm:block" style={{ width: 150, height: 96 }} maskColor="rgba(0, 0, 0, 0.05)" nodeColor={resolvedColors.neutral300} pannable />
             </ReactFlow>
           </div>
         )}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { ArrowLeft, Network, Pencil, RefreshCw } from "lucide-react";
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
+import { ChevronRight, GitBranch, Network, Pencil, RefreshCw, KanbanSquare, FolderGit2 } from "lucide-react";
 import {
   api,
   getToken,
@@ -13,13 +13,19 @@ import {
   type Section,
 } from "../lib/api";
 import { BoardColumn } from "../components/BoardColumn";
-import { BoardCard } from "../components/BoardCard";
+import { BoardCard, BoardCardOverlay } from "../components/BoardCard";
 import { IssueDetailContent } from "../components/IssueDetailContent";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Avatar, AvatarFallback, initialFromEmail } from "../components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Dialog, DialogContent, DialogTitle } from "../components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogTitle } from "../components/ui/dialog";
+import { Field } from "../components/ui/field";
+import { Skeleton } from "../components/ui/skeleton";
+import { EmptyState } from "../components/ui/empty-state";
+import { NavTabs } from "../components/NavTabs";
+import { StatusMeter } from "../components/StatusMeter";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { toast } from "../hooks/use-toast";
 
 // Same pattern as API_BASE in lib/api.ts — the deployed Websockets URL
@@ -87,6 +93,8 @@ export function BoardView() {
   const [editDescription, setEditDescription] = useState("");
   const [editRepository, setEditRepository] = useState("");
   const [syncing, setSyncing] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Issue | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const [savingBoardEdit, setSavingBoardEdit] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   // Bookkeeping for tickets waiting on a live "plan-ready"/chat reply, so a
@@ -268,12 +276,11 @@ export function BoardView() {
   }
 
   function handleDeleteIssue(issue: Issue) {
-    if (window.confirm(`Delete "${issue.title}"?`)) {
-      send({ type: "delete-issue", issueId: issue.id });
-    }
+    send({ type: "delete-issue", issueId: issue.id });
   }
 
   function handleDragEnd(event: DragEndEvent) {
+    setDraggingId(null);
     const { active, over } = event;
     if (!over) return;
     const issueId = String(active.id);
@@ -647,72 +654,79 @@ export function BoardView() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <header className="border-b border-border bg-surface">
-        <div className="flex items-center justify-between gap-4 px-6 py-3">
-          <div className="flex min-w-0 items-center gap-4">
-            <Button variant="ghost" size="sm" asChild>
-              {/* Text labels hidden below sm — four header items (back,
-                  title, graph link, presence avatars) genuinely don't
-                  fit in one row at phone width with all of them spelled
-                  out; icons stay, since the icon alone is still a clear
-                  enough target at this size, same bar the rest of this
-                  app's compact UI already holds to. */}
-              <Link to="/">
-                <ArrowLeft className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Boards</span>
-              </Link>
-            </Button>
-            <div className="hidden h-5 w-px bg-border sm:block" />
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <h1 className="truncate text-sm font-semibold text-foreground">
-                  {board?.title ?? "Loading..."}
-                </h1>
-                {board && (
-                  <button
-                    onClick={openEditBoard}
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                    aria-label="Edit board"
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-              {board?.description && (
-                <p className="hidden truncate text-xs text-muted-foreground sm:block">{board.description}</p>
+      <header className="relative z-10 shrink-0 border-b border-border bg-glow">
+        <div className="px-4 pt-5 sm:px-8">
+          <nav aria-label="Breadcrumb" className="type-eyebrow flex items-center gap-1.5">
+            <Link to="/" className="rounded-sm transition-colors hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3">
+              Boards
+            </Link>
+            <ChevronRight aria-hidden className="h-3 w-3 text-neutral-400" />
+            <span aria-current="page" className="truncate text-neutral-600">
+              {board?.title ?? "…"}
+            </span>
+          </nav>
+
+          <div className="mt-3 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+            <div className="min-w-0 space-y-1.5">
+              <h1 className="type-title truncate">{board?.title ?? <Skeleton className="h-9 w-64" />}</h1>
+              {board && (
+                <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-compact text-neutral-500">
+                  {board.repository ? (
+                    <span className="inline-flex items-center gap-1.5 font-mono text-xs text-neutral-600">
+                      <GitBranch aria-hidden className="h-3.5 w-3.5 text-neutral-400" />
+                      {board.repository}
+                    </span>
+                  ) : (
+                    <span>No repository linked</span>
+                  )}
+                  {board.description && <span className="line-clamp-1">{board.description}</span>}
+                </div>
               )}
-              <p className="hidden truncate text-xs text-muted-foreground sm:block">
-                {board?.repository ? `Repository: ${board.repository}` : "No repository linked"}
-              </p>
             </div>
-            {board?.repository && (
-              <Button variant="ghost" size="sm" onClick={handleSyncIssues} disabled={syncing}>
-                <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />{" "}
-                <span className="hidden sm:inline">{syncing ? "Syncing..." : "Sync issues"}</span>
-              </Button>
-            )}
-            <Button variant="ghost" size="sm" asChild>
-              <Link to={`/boards/${boardId}/graph`}>
-                <Network className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Dependency graph</span>
-              </Link>
-            </Button>
+
+            <div className="flex shrink-0 items-center gap-2">
+              {users.length > 0 && (
+                <div className="mr-2 flex items-center -space-x-1.5" role="group" aria-label="People on this board now">
+                  {users.map((u) => (
+                    <Tooltip key={u.userId}>
+                      <TooltipTrigger asChild>
+                        {/* tabIndex + aria-label so who's online is reachable by
+                            keyboard/screen reader too, not just mouse hover. */}
+                        <Avatar email={u.email} tabIndex={0} aria-label={u.email} className="relative h-8 w-8 border-2 border-background">
+                          <AvatarFallback>{initialFromEmail(u.email)}</AvatarFallback>
+                          <span aria-hidden className="absolute -bottom-px -right-px h-2 w-2 rounded-full bg-success-500 ring-2 ring-background" />
+                        </Avatar>
+                      </TooltipTrigger>
+                      <TooltipContent>{u.email} · online</TooltipContent>
+                    </Tooltip>
+                  ))}
+                </div>
+              )}
+              {board?.repository && (
+                <Button variant="secondary" size="sm" onClick={handleSyncIssues} disabled={syncing}>
+                  <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+                  {syncing ? "Syncing…" : "Sync issues"}
+                </Button>
+              )}
+              {board && (
+                <Button variant="secondary" size="sm" onClick={openEditBoard}>
+                  <Pencil className="h-3.5 w-3.5" /> Edit
+                </Button>
+              )}
+            </div>
           </div>
 
-          <div className="flex shrink-0 items-center -space-x-2">
-            {users.map((u) => (
-              <Tooltip key={u.userId}>
-                <TooltipTrigger asChild>
-                  {/* tabIndex + aria-label so who's online is reachable by
-                      keyboard/screen reader too, not just mouse hover —
-                      Avatar renders a plain span by default, outside the
-                      tab order, and Radix Tooltip also shows on focus once
-                      the trigger is actually focusable. */}
-                  <Avatar tabIndex={0} aria-label={u.email} className="border-2 border-surface">
-                    <AvatarFallback>{initialFromEmail(u.email)}</AvatarFallback>
-                  </Avatar>
-                </TooltipTrigger>
-                <TooltipContent>{u.email}</TooltipContent>
-              </Tooltip>
-            ))}
+          <div className="mt-5 flex items-end justify-between gap-8">
+            <NavTabs
+              label="Board views"
+              items={[
+                { label: "Board", to: `/boards/${boardId}`, active: true, icon: <KanbanSquare className="h-4 w-4" /> },
+                { label: "Dependency graph", to: `/boards/${boardId}/graph`, active: false, icon: <Network className="h-4 w-4" /> },
+              ]}
+            />
+            <div className="hidden flex-1 justify-end pb-3 md:flex">
+              <StatusMeter issues={allIssues} />
+            </div>
           </div>
         </div>
       </header>
@@ -720,82 +734,143 @@ export function BoardView() {
       <Dialog open={editBoardOpen} onOpenChange={setEditBoardOpen}>
         <DialogContent>
           <DialogTitle>Edit board</DialogTitle>
-          <form onSubmit={handleSaveBoardEdit} className="mt-4 space-y-3">
-            <Input
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              placeholder="Board title"
-              disabled={savingBoardEdit}
-              autoFocus
-            />
-            <Input
-              value={editDescription}
-              onChange={(e) => setEditDescription(e.target.value)}
-              placeholder="Description (optional)"
-              disabled={savingBoardEdit}
-            />
-            <Input
-              value={editRepository}
-              onChange={(e) => setEditRepository(e.target.value)}
-              placeholder="GitHub repository, e.g. owner/name (optional)"
-              disabled={savingBoardEdit}
-            />
-            <Button type="submit" variant="primary" disabled={savingBoardEdit} className="w-full">
-              {savingBoardEdit ? "Saving..." : "Save"}
-            </Button>
+          <form onSubmit={handleSaveBoardEdit} className="mt-5 space-y-4">
+            <Field label="Board title" htmlFor="edit-title">
+              <Input
+                id="edit-title"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                disabled={savingBoardEdit}
+                autoFocus
+              />
+            </Field>
+            <Field label="Description" htmlFor="edit-description" hint="Optional">
+              <Input
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                disabled={savingBoardEdit}
+              />
+            </Field>
+            <Field label="GitHub repository" htmlFor="edit-repo" hint="Optional. Format: owner/name">
+              <Input
+                id="edit-repo"
+                value={editRepository}
+                onChange={(e) => setEditRepository(e.target.value)}
+                placeholder="owner/name"
+                disabled={savingBoardEdit}
+                className="font-mono text-compact"
+              />
+            </Field>
+            <div className="flex justify-end gap-2 pt-1">
+              <DialogClose asChild>
+                <Button type="button" variant="secondary">
+                  Cancel
+                </Button>
+              </DialogClose>
+              <Button type="submit" variant="primary" disabled={savingBoardEdit}>
+                {savingBoardEdit ? "Saving..." : "Save"}
+              </Button>
+            </div>
           </form>
         </DialogContent>
       </Dialog>
 
-      <div className="flex flex-1 overflow-hidden">
-        <main className="flex-1 overflow-x-auto overflow-y-auto p-6">
-          <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-            <div className="flex items-start gap-4">
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete this ticket?"
+        description={deleteTarget ? `"${deleteTarget.title}" and its plan and chat will be removed from the board for everyone.` : ""}
+        confirmLabel="Delete ticket"
+        onConfirm={() => deleteTarget && handleDeleteIssue(deleteTarget)}
+      />
+
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sunken">
+        {board && allIssues.length === 0 && (
+          <div className="px-4 pt-5 sm:px-8">
+            <EmptyState
+              icon={FolderGit2}
+              className="py-8"
+              title="No tickets on this board yet"
+              description={
+                board.repository
+                  ? "Tickets come from GitHub issues. Sync to pull in what's open on the linked repository."
+                  : "Tickets come from GitHub issues. Link a repository to start importing them."
+              }
+              action={
+                board.repository ? (
+                  <Button variant="primary" size="sm" onClick={handleSyncIssues} disabled={syncing}>
+                    <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+                    {syncing ? "Syncing…" : "Sync issues"}
+                  </Button>
+                ) : (
+                  <Button variant="primary" size="sm" onClick={openEditBoard}>
+                    Link a repository
+                  </Button>
+                )
+              }
+            />
+          </div>
+        )}
+        <main className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+          <DndContext
+            sensors={sensors}
+            onDragStart={(e: DragStartEvent) => setDraggingId(String(e.active.id))}
+            onDragCancel={() => setDraggingId(null)}
+            onDragEnd={handleDragEnd}
+          >
+            <div className="flex h-full min-w-max divide-x divide-border px-1 sm:px-5">
+              {!board &&
+                [0, 1, 2].map((i) => (
+                  <div key={i} className="w-[19.5rem] shrink-0 space-y-2.5 px-3 pt-5" aria-hidden>
+                    <Skeleton className="mb-4 h-4 w-24" />
+                    <Skeleton className="h-24 w-full bg-surface" />
+                    <Skeleton className="h-24 w-full bg-surface" />
+                  </div>
+                ))}
               {sections.map((section) => (
                 <BoardColumn
                   key={section.id}
                   sectionId={section.id}
                   title={section.title}
                   issueCount={section.issues.length}
+                  emptyHint={allIssues.length > 0}
                 >
-                  {section.issues.map((issue) => (
+                  {section.issues.map((issue, index) => (
                     <BoardCard
                       key={issue.id}
                       issue={issue}
+                      index={index}
                       isSelected={selectedIssueId === issue.id}
                       justMoved={justMovedId === issue.id}
                       onSelect={() => {
                         setSelectedIssueId(issue.id);
                         setFullViewOpen(true);
                       }}
-                      onDelete={() => handleDeleteIssue(issue)}
+                      onDelete={() => setDeleteTarget(issue)}
                     />
                   ))}
                 </BoardColumn>
               ))}
             </div>
+            <DragOverlay dropAnimation={{ duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" }}>
+              {draggingId ? (() => {
+                const dragged = allIssues.find((i) => i.id === draggingId);
+                return dragged ? <BoardCardOverlay issue={dragged} /> : null;
+              })() : null}
+            </DragOverlay>
           </DndContext>
         </main>
       </div>
 
-      {/* Selecting a card opens this directly — a focused dialog over a
-          dimmed board, showing only that one ticket's title, description,
-          plan, and chat. No intermediate docked panel: this is the only
-          detail surface a card click leads to. */}
+      {/* Selecting a card opens this directly — a focused dialog over the
+          board showing one ticket's details and chat. Full-screen below sm:
+          a floating box on a phone would just be a cramped modal. */}
       <Dialog open={fullViewOpen && !!selectedIssue} onOpenChange={(open) => !open && closeDetail()}>
-        {/* Full-screen below sm — a focused dialog floating over a dimmed
-            board makes sense with room to spare on desktop; on a phone
-            it would just be a cramped box inside an already-small
-            screen, so it becomes the whole screen instead.
-
-            Sized much closer to the actual viewport on desktop too
-            (95vh/95vw up to a 6xl cap, not 85vh/90vw/4xl) — reading a
-            real description with acceptance criteria, a generated plan,
-            and chatting all at once needs real room, not a modal that
-            leaves most of the screen as dimmed backdrop. */}
         <DialogContent
           hideClose
-          className="flex h-screen w-screen max-w-none flex-col overflow-hidden rounded-none p-0 sm:h-[95vh] sm:w-[95vw] sm:max-w-6xl sm:rounded-lg"
+          variant="sheet"
+          className="flex flex-col overflow-hidden p-0 sm:w-[min(96vw,1180px)] sm:rounded-l-3xl"
         >
           {selectedIssue && (
             <IssueDetailContent

@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Route, Routes } from "react-router-dom";
+import { MotionConfig } from "motion/react";
 import { Loader2 } from "lucide-react";
 import { SignUp } from "./pages/SignUp";
 import { SignIn } from "./pages/SignIn";
@@ -29,34 +30,36 @@ function RouteLoading() {
 
 function App() {
   return (
-    <TooltipProvider>
-      <Routes>
-        <Route path="/signup" element={<SignUp />} />
-        <Route path="/signin" element={<SignIn />} />
-        {/* Phase A verification only — a throwaway gallery of every
-            primitive and variant, screenshotted to catch visual bugs
-            before they propagate into real pages. Not linked from
-            anywhere in the real app nav. */}
-        <Route path="/dev/components" element={<DevComponents />} />
-        <Route element={<ProtectedRoute />}>
-          <Route element={<AppShell />}>
-            <Route path="/" element={<BoardsList />} />
-            <Route path="/boards/:boardId" element={<BoardView />} />
-            <Route
-              path="/boards/:boardId/graph"
-              element={
-                <Suspense fallback={<RouteLoading />}>
-                  <GraphView />
-                </Suspense>
-              }
-            />
-            <Route path="/organisations" element={<OrganisationsPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+    <MotionConfig reducedMotion="user">
+      <TooltipProvider>
+        <Routes>
+          <Route path="/signup" element={<SignUp />} />
+          <Route path="/signin" element={<SignIn />} />
+          {/* Phase A verification only — a throwaway gallery of every
+              primitive and variant, screenshotted to catch visual bugs
+              before they propagate into real pages. Not linked from
+              anywhere in the real app nav. */}
+          <Route path="/dev/components" element={<DevComponents />} />
+          <Route element={<ProtectedRoute />}>
+            <Route element={<AppShell />}>
+              <Route path="/" element={<BoardsList />} />
+              <Route path="/boards/:boardId" element={<BoardView />} />
+              <Route
+                path="/boards/:boardId/graph"
+                element={
+                  <Suspense fallback={<RouteLoading />}>
+                    <GraphView />
+                  </Suspense>
+                }
+              />
+              <Route path="/organisations" element={<OrganisationsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+            </Route>
           </Route>
-        </Route>
-      </Routes>
-      <Toaster />
-    </TooltipProvider>
+        </Routes>
+        <Toaster />
+      </TooltipProvider>
+    </MotionConfig>
   );
 }
 

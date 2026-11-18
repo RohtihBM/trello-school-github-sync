@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { AuthShell } from "../components/AuthShell";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Field } from "../components/ui/field";
 import { toast } from "../hooks/use-toast";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -68,33 +69,29 @@ export function SignUp() {
       footer={
         <>
           Already have an account?{" "}
-          <Link to="/signin" className="font-medium text-accent-600 hover:underline">
+          <Link to="/signin" className="inline-block font-medium text-foreground underline decoration-neutral-300 underline-offset-4 transition-colors hover:decoration-foreground pointer-coarse:-my-3 pointer-coarse:py-3">
             Sign in
           </Link>
         </>
       }
     >
-      <form onSubmit={handleSubmit} noValidate className="space-y-4">
-        <div className="space-y-1.5">
-          <label htmlFor="email" className="text-sm font-medium text-foreground">
-            Email
-          </label>
+      <form onSubmit={handleSubmit} noValidate className="space-y-5">
+        <Field label="Email" htmlFor="email" error={emailError}>
           <Input
             id="email"
             type="email"
             autoComplete="email"
+            placeholder="you@company.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={pending}
             aria-invalid={emailError ? true : undefined}
+            autoFocus
           />
-          {emailError && <p className="text-xs text-danger-600">{emailError}</p>}
-        </div>
+        </Field>
 
-        <div className="space-y-1.5">
-          <label htmlFor="password" className="text-sm font-medium text-foreground">
-            Password
-          </label>
+        <Field label="Password" htmlFor="password" error={passwordError}
+          hint="At least 8 characters">
           <Input
             id="password"
             type="password"
@@ -104,14 +101,9 @@ export function SignUp() {
             disabled={pending}
             aria-invalid={passwordError ? true : undefined}
           />
-          {passwordError ? (
-            <p className="text-xs text-danger-600">{passwordError}</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">At least 8 characters</p>
-          )}
-        </div>
+        </Field>
 
-        <Button type="submit" variant="primary" disabled={pending} className="w-full">
+        <Button type="submit" variant="primary" disabled={pending} size="lg" className="w-full">
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}
           {pending ? "Creating account..." : "Create account"}
         </Button>

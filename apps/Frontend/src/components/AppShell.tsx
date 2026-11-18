@@ -1,47 +1,28 @@
-import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { Menu } from "lucide-react";
-import { Sidebar } from "./Sidebar";
+import { motion } from "motion/react";
+import { TopNav } from "./TopNav";
+import { EASE_OUT } from "../lib/motion";
 
-// Rendered once, wrapping every authenticated page via a nested route in
-// App.tsx — the sidebar is a persistent, app-wide structural element now,
-// not something each page builds its own copy of. Child pages fill the
-// remaining height (h-full, not h-screen — they're no longer assumed to
-// own the whole viewport, just whatever's left after the sidebar).
+// Rendered once, wrapping every authenticated page. The page below fills the
+// remaining height and owns its own scrolling. Each route change gives the
+// new page a short rise-and-fade so navigation reads as moving to a new
+// place, not a hard swap; under reduced motion the app-level MotionConfig
+// makes it inert.
 export function AppShell() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const location = useLocation();
-
-  // Closes the drawer on any navigation, including ones that don't go
-  // through Sidebar's own links (e.g. the graph view's node-click deep
-  // link into BoardView) — without this, navigating past the sidebar
-  // some other way would leave it stuck open over the new page.
-  useEffect(() => {
-    setSidebarOpen(false);
-  }, [location.pathname]);
+  const { pathname } = useLocation();
 
   return (
-    <div className="flex h-screen">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {/* Only exists below md — on desktop the sidebar is already
-            visible, so there's nothing to toggle. A fixed top bar rather
-            than floating over page content: every page's own header
-            already reserves space at the top, this just becomes part of
-            that same row on mobile instead of overlapping it. */}
-        <div className="flex shrink-0 items-center border-b border-border bg-surface px-3 py-2 md:hidden">
-          <button
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Open menu"
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-neutral-100 hover:text-foreground"
-          >
-            <Menu className="h-5 w-5" />
-          </button>
-        </div>
-        <div className="min-w-0 flex-1 overflow-hidden">
-          <Outlet />
-        </div>
-      </div>
+    <div className="flex h-dvh flex-col bg-background">
+      <TopNav />
+      <motion.div
+        key={pathname}
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: EASE_OUT }}
+        className="min-h-0 min-w-0 flex-1 overflow-hidden"
+      >
+        <Outlet />
+      </motion.div>
     </div>
   );
 }

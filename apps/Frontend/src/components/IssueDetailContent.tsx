@@ -1,10 +1,13 @@
+import { useState } from "react";
 import { X } from "lucide-react";
+import { cn } from "../lib/cn";
 import type { BoardMember, Issue, OverlapInfo } from "../lib/api";
-import { Badge, STATUS_BADGE_VARIANT } from "./ui/badge";
+import { StatusBadge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { DialogTitle } from "./ui/dialog";
 import { TicketDetailsPane } from "./TicketDetailsPane";
 import { ChatPane } from "./ChatPane";
+import { LifecycleStepper } from "./LifecycleStepper";
 
 interface IssueDetailContentProps {
   issue: Issue;
@@ -43,6 +46,9 @@ export function IssueDetailContent({
   onUnassign,
   onClose,
 }: IssueDetailContentProps) {
+  // Below lg there is room for one pane at a time; a switch beats two cramped
+  // half-height panes. From lg up both show side by side and this is ignored.
+  const [tab, setTab] = useState<"details" | "chat">("details");
   const detailsPane = (
     <TicketDetailsPane
       issue={issue}
@@ -72,55 +78,71 @@ export function IssueDetailContent({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex items-start justify-between gap-2 border-b border-border bg-surface p-4">
-        <div className="min-w-0 space-y-1">
-          {/* A real Radix DialogTitle, not a plain <p> — found by an
-              actual axe-core scan (Phase 6), not assumed: a plain <p>
-              has no aria-labelledby link to the dialog, so the dialog
-              itself has no accessible name at all for a screen reader.
-              Same visual result, className override keeps it identical
-              to what was here before. */}
-          <DialogTitle className="truncate text-sm font-semibold text-foreground">
-            {issue.title}
-          </DialogTitle>
-          <Badge variant={STATUS_BADGE_VARIANT[issue.status]}>{issue.status}</Badge>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
-            <X className="h-3.5 w-3.5" />
+      <div className="relative shrink-0 border-b border-border bg-glow px-5 pb-5 pt-5 sm:px-8">
+        <div className="flex items-start justify-between gap-4">
+          <StatusBadge status={issue.status} />
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close ticket" className="-mr-2 -mt-1 shrink-0">
+            <X className="h-4 w-4" />
           </Button>
+        </div>
+        {/* A real Radix DialogTitle: without it the dialog has no accessible
+            name for a screen reader. */}
+        <DialogTitle className="mt-3 max-w-3xl text-[1.75rem] leading-9 sm:text-[2.125rem] sm:leading-10">{issue.title}</DialogTitle>
+        <div className="mt-6">
+          <LifecycleStepper issue={issue} />
         </div>
       </div>
 
-      {/* Two distinct elevated panels, not one pane split by a border
-          line — details and chat each read as their own self-contained
-          surface, the same bordered/shadowed card language the rest of
-          the app already uses (BoardsList's board cards, etc.), not a
-          new pattern invented just for this dialog. */}
-      {/* Stacked (one column, two equal rows) below sm, side by side from
-          sm up — grid-rows-2 on the stacked case matters just as much as
-          grid-cols-1: without it, both panels would want their natural
-          content height in a container that doesn't scroll, pushing the
-          chat composer off screen instead of splitting the space. */}
-      <div className="grid flex-1 grid-cols-1 grid-rows-2 gap-2 overflow-hidden p-2 sm:grid-cols-2 sm:grid-rows-1">
-        <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
-          {/* Compact, fixed header — the description itself now lives in
-              the scrollable body below as its own section (see
-              TicketDetailsPane), not here, since a real description with
-              an acceptance-criteria list needs room to grow rather than
-              a header strip that would otherwise keep expanding with it. */}
-          <div className="shrink-0 border-b border-border px-3 py-2.5">
-            <p className="text-xs font-semibold text-foreground">Ticket details</p>
-          </div>
-          <div className="flex-1 overflow-y-auto">{detailsPane}</div>
-        </div>
+      <div role="tablist" aria-label="Ticket sections" className="flex shrink-0 gap-1 border-b border-border px-4 lg:hidden">
+        {(
+          [
+            ["details", "Details"],
+            ["chat", "Plan & conversation"],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            role="tab"
+            type="button"
+            id={`ticket-tab-${id}`}
+            aria-selected={tab === id}
+            aria-controls={`ticket-panel-${id}`}
+            onClick={() => setTab(id)}
+            className={cn(
+              "-mb-px h-10 border-b-2 px-2.5 text-compact font-medium transition-colors",
+              tab === id ? "border-ink text-foreground" : "border-transparent text-neutral-500 hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-        <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
-          <div className="shrink-0 border-b border-border px-3 py-2.5">
-            <p className="text-xs font-semibold text-foreground">Chat</p>
-          </div>
-          <div className="flex-1 overflow-hidden">{chatPane}</div>
-        </div>
+      {/* One column below lg (the active pane only), two columns from lg up. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+        <section
+          id="ticket-panel-details"
+          role="tabpanel"
+          aria-labelledby="ticket-details-heading"
+          className={cn("min-h-0 flex-col bg-background", tab === "details" ? "flex" : "hidden lg:flex")}
+        >
+          <h3 id="ticket-details-heading" className="sr-only">
+            Details
+          </h3>
+          <div className="min-h-0 flex-1 overflow-y-auto pt-4">{detailsPane}</div>
+        </section>
+
+        <section
+          id="ticket-panel-chat"
+          role="tabpanel"
+          aria-labelledby="ticket-chat-heading"
+          className={cn("min-h-0 flex-col lg:border-l lg:border-border", tab === "chat" ? "flex" : "hidden lg:flex")}
+        >
+          <h3 id="ticket-chat-heading" className="type-eyebrow shrink-0 px-5 pb-2 pt-4 max-lg:sr-only sm:px-6">
+            Plan &amp; conversation
+          </h3>
+          <div className="min-h-0 flex-1 overflow-hidden">{chatPane}</div>
+        </section>
       </div>
     </div>
   );
