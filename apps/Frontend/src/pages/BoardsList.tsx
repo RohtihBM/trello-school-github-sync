@@ -43,6 +43,7 @@ export function BoardsList() {
   const [search, setSearch] = useState("");
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [boardRepository, setBoardRepository] = useState("");
   const [orgName, setOrgName] = useState("");
   const [boardTitle, setBoardTitle] = useState("");
   const [selectedOrgId, setSelectedOrgId] = useState("");
@@ -114,9 +115,10 @@ export function BoardsList() {
     try {
       await api("/boards", {
         method: "POST",
-        body: JSON.stringify({ title: boardTitle, orgId: selectedOrgId }),
+        body: JSON.stringify({ title: boardTitle, orgId: selectedOrgId, repository: boardRepository.trim() }),
       });
       setBoardTitle("");
+      setBoardRepository("");
       setCreateOpen(false);
       await loadAll();
     } catch (err) {
@@ -339,6 +341,12 @@ export function BoardsList() {
                   placeholder="Board title"
                   disabled={creatingBoard}
                   autoFocus
+                />
+                <Input
+                  value={boardRepository}
+                  onChange={(e) => setBoardRepository(e.target.value)}
+                  placeholder="GitHub repository, e.g. owner/name (optional)"
+                  disabled={creatingBoard}
                 />
                 <Button type="submit" variant="primary" disabled={creatingBoard} className="w-full">
                   {creatingBoard ? "Creating..." : "Create board"}

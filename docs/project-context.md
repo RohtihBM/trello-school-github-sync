@@ -82,7 +82,7 @@ internalizing:
 ## Credentials/config map (not the actual values — where they live)
 
 - `apps/Backend/.env` — `JWT_SECRET`, `INTERNAL_API_SECRET`,
-  `INTERNAL_BROADCAST_URL`, `GITHUB_SYNC_BOARD_ID`, `GITHUB_WEBHOOK_SECRET`,
+  `INTERNAL_BROADCAST_URL`, `GITHUB_WEBHOOK_SECRET`,
   `REDIS_URL`.
 - `apps/Websockets/.env` — `JWT_SECRET`, `INTERNAL_API_SECRET`,
   `INTERNAL_PORT`.

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { ArrowLeft, Network, Pencil } from "lucide-react";
+import { ArrowLeft, Network, Pencil, RefreshCw } from "lucide-react";
 import {
   api,
   getToken,
@@ -85,6 +85,8 @@ export function BoardView() {
   const [editBoardOpen, setEditBoardOpen] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editRepository, setEditRepository] = useState("");
+  const [syncing, setSyncing] = useState(false);
   const [savingBoardEdit, setSavingBoardEdit] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
 
@@ -206,12 +208,31 @@ export function BoardView() {
     if (!board) return;
     setEditTitle(board.title);
     setEditDescription(board.description ?? "");
+    setEditRepository(board.repository ?? "");
     setEditBoardOpen(true);
   }
 
   // No live broadcast for board-level edits (unlike issues) — applying
   // the PATCH response straight to local state, the same way BoardsList
   // already does for the same route.
+  // Imports the linked repository's open GitHub issues as tickets. New tickets
+  // arrive through the board's live broadcast, so no local list update is needed.
+  async function handleSyncIssues() {
+    if (!board || syncing) return;
+    setSyncing(true);
+    try {
+      const r = await api<{ repository: string; created: number; updated: number }>(
+        `/boards/${board.id}/sync-issues`,
+        { method: "POST" },
+      );
+      toast({ title: `Synced ${r.repository}`, description: `${r.created} new, ${r.updated} updated` });
+    } catch (err) {
+      errorToast("Failed to sync issues", err);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function handleSaveBoardEdit(e: FormEvent) {
     e.preventDefault();
     if (!board || editTitle.trim() === "" || savingBoardEdit) return;
@@ -219,7 +240,7 @@ export function BoardView() {
     try {
       const updated = await api<Board>(`/boards/${board.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ title: editTitle, description: editDescription }),
+        body: JSON.stringify({ title: editTitle, description: editDescription, repository: editRepository.trim() }),
       });
       setBoard(updated);
       setEditBoardOpen(false);
@@ -562,7 +583,16 @@ export function BoardView() {
               {board?.description && (
                 <p className="hidden truncate text-xs text-muted-foreground sm:block">{board.description}</p>
               )}
+              <p className="hidden truncate text-xs text-muted-foreground sm:block">
+                {board?.repository ? `Repository: ${board.repository}` : "No repository linked"}
+              </p>
             </div>
+            {board?.repository && (
+              <Button variant="ghost" size="sm" onClick={handleSyncIssues} disabled={syncing}>
+                <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />{" "}
+                <span className="hidden sm:inline">{syncing ? "Syncing..." : "Sync issues"}</span>
+              </Button>
+            )}
             <Button variant="ghost" size="sm" asChild>
               <Link to={`/boards/${boardId}/graph`}>
                 <Network className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Dependency graph</span>
@@ -605,6 +635,12 @@ export function BoardView() {
               value={editDescription}
               onChange={(e) => setEditDescription(e.target.value)}
               placeholder="Description (optional)"
+              disabled={savingBoardEdit}
+            />
+            <Input
+              value={editRepository}
+              onChange={(e) => setEditRepository(e.target.value)}
+              placeholder="GitHub repository, e.g. owner/name (optional)"
               disabled={savingBoardEdit}
             />
             <Button type="submit" variant="primary" disabled={savingBoardEdit} className="w-full">

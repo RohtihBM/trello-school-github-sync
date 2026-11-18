@@ -28,9 +28,28 @@ const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/;
 const MIN_CHUNK_LINES = 6;
 const MAX_CHUNK_LINES = 80;
 
+// Where a new chunk may start, per language. Languages with no rule here (HTML,
+// CSS, SQL, Java and so on) get no boundaries, so they are split only by size.
+const PYTHON_START = /^(?:async\s+def|def|class)\s/;
+const GO_START = /^(?:func|type|var|const)\s/;
+const RUST_START = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:fn|struct|enum|impl|trait|mod)\b/;
+const RUBY_START = /^(?:def|class|module)\s/;
+
 function isBoundary(file: string, line: string): boolean {
   if (file.endsWith(".prisma")) return PRISMA_START.test(line);
-  return TS_DECL_START.test(line) || ROUTE_START.test(line);
+  if (/\.py$/i.test(file)) return PYTHON_START.test(line);
+  if (/\.go$/i.test(file)) return GO_START.test(line);
+  if (/\.rs$/i.test(file)) return RUST_START.test(line);
+  if (/\.rb$/i.test(file)) return RUBY_START.test(line);
+  if (/\.(ts|tsx|js|jsx|mjs|cjs)$/i.test(file)) return TS_DECL_START.test(line) || ROUTE_START.test(line);
+  return false;
+}
+
+// Leading comments stay with the definition below them. "#" comments belong to
+// Python and Ruby only; in other languages a line starting with # is code.
+function isCommentLine(file: string, line: string): boolean {
+  if (COMMENT_LINE.test(line)) return true;
+  return /\.(py|rb)$/i.test(file) && /^\s*#/.test(line);
 }
 
 function chunkName(file: string, lines: string[]): string {
@@ -52,7 +71,7 @@ function chunkFile(file: SourceFile): Chunk[] {
   for (let i = 1; i < lines.length; i++) {
     if (!isBoundary(file.path, lines[i] ?? "")) continue;
     let s = i;
-    while (s - 1 > (starts[starts.length - 1] ?? 0) && COMMENT_LINE.test(lines[s - 1] ?? "")) s--;
+    while (s - 1 > (starts[starts.length - 1] ?? 0) && isCommentLine(file.path, lines[s - 1] ?? "")) s--;
     if (s > (starts[starts.length - 1] ?? 0)) starts.push(s);
   }
 

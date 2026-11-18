@@ -20,7 +20,21 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 2.5);
 }
 
-const SOURCE_FILE = /\.(ts|tsx|prisma)$/;
+// What counts as source, so the same pipeline works on any repository, not
+// just TypeScript ones. Lock files, images and data are excluded by extension;
+// dependency, build and generated folders and minified or very large files are
+// skipped because they are noise or too big to be worth embedding.
+const SOURCE_FILE =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|rb|java|kt|cs|php|swift|c|h|cpp|hpp|sql|prisma|html|css|scss|vue|svelte)$/i;
+const SKIPPED_FOLDER = /(^|\/)(node_modules|vendor|dist|build|coverage|\.next|generated)\//;
+const ROOT_README = /^readme\.md$/i;
+const MAX_FILE_BYTES = 200_000;
+
+export function isSourcePath(file: string): boolean {
+  if (SKIPPED_FOLDER.test(file)) return false;
+  if (file.endsWith(".d.ts") || /\.min\.(js|css)$/i.test(file)) return false;
+  return SOURCE_FILE.test(file) || ROOT_README.test(file);
+}
 
 const EXPORT_NAME =
   /export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|interface|type|enum)\s+([A-Za-z0-9_$]+)/g;
@@ -28,11 +42,23 @@ const ROUTE = /\b\w+(?:Router|app)\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]
 const PRISMA_DECL = /^(?:model|enum)\s+(\w+)/gm;
 const IMPORT_SPEC = /(?:\bfrom\s+|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)["']([^"']+)["']/g;
 
+// Top-level definitions in languages other than TypeScript/JavaScript.
+const OTHER_DEFS =
+  /^(?:async\s+def|def|class|func|fn|struct|trait|impl|module)\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
+const JS_PLAIN_DEFS = /^(?:async\s+)?(?:function\*?|class)\s+([A-Za-z0-9_$]+)/gm;
+
 function extractNames(file: string, content: string): string[] {
   const names: string[] = [];
   if (file.endsWith(".prisma")) {
     for (const m of content.matchAll(PRISMA_DECL)) if (m[1]) names.push(m[1]);
     return names;
+  }
+  if (/\.(py|go|rs|rb)$/i.test(file)) {
+    for (const m of content.matchAll(OTHER_DEFS)) if (m[1]) names.push(m[1]);
+    return names;
+  }
+  if (/\.(js|jsx|mjs|cjs)$/i.test(file)) {
+    for (const m of content.matchAll(JS_PLAIN_DEFS)) if (m[1]) names.push(m[1]);
   }
   for (const m of content.matchAll(ROUTE)) if (m[1] && m[2]) names.push(`${m[1].toUpperCase()} ${m[2]}`);
   for (const m of content.matchAll(EXPORT_NAME)) if (m[1]) names.push(m[1]);
@@ -63,12 +89,13 @@ export async function loadSourceFiles(repoPath: string): Promise<SourceFile[]> {
   const { stdout } = await exec("git", ["ls-files"], { cwd: repoPath, maxBuffer: 20 * 1024 * 1024 });
   const paths = stdout
     .split("\n")
-    .filter((f) => SOURCE_FILE.test(f) && !f.includes("generated/") && !f.endsWith(".d.ts"));
+    .filter(isSourcePath);
   const known = new Set(paths);
 
   const files: SourceFile[] = [];
   for (const p of paths) {
     const content = await readFile(path.join(repoPath, p), "utf8");
+    if (content.length > MAX_FILE_BYTES) continue;
     const imports = new Set<string>();
     for (const m of content.matchAll(IMPORT_SPEC)) {
       const resolved = m[1] ? resolveImport(p, m[1], known) : null;
@@ -87,15 +114,6 @@ export async function loadSourceFiles(repoPath: string): Promise<SourceFile[]> {
 
 export function totalTokens(files: SourceFile[]): number {
   return files.reduce((sum, f) => sum + f.tokens, 0);
-}
-
-export type Tier = "full" | "map";
-
-// "full" while all the source fits the budget, "map" (ranked slice plus a
-// map of every file) once it doesn't. This is what keeps the size of one
-// plan's context from growing with the repository.
-export function chooseTier(files: SourceFile[], fullMaxTokens: number): Tier {
-  return totalTokens(files) <= fullMaxTokens ? "full" : "map";
 }
 
 const STOPWORDS = new Set(

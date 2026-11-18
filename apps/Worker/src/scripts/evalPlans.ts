@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { generatePlan, type ConfiguredStrategy, type PlanResult } from "../processPlanJob.js";
 import { ensureRepoCloned } from "../repoClone.js";
+import { DEFAULT_REPO, findOrCreateRepository } from "../repositories.js";
 
 // End-to-end plan evaluation on the labelled tickets in
 // docs/eval/retrieval-tickets.json. The question it answers is the one file
@@ -54,7 +55,8 @@ async function main() {
     (s) => s.trim() as ConfiguredStrategy,
   );
 
-  const repoPath = await ensureRepoCloned();
+  const repository = await findOrCreateRepository(process.env.REPO ?? DEFAULT_REPO);
+  const repoPath = await ensureRepoCloned(repository);
   const rows: Array<Record<string, unknown>> = [];
 
   for (const t of tickets) {
@@ -63,6 +65,7 @@ async function main() {
         title: t.title,
         description: t.description,
         repoPath,
+        repositoryId: repository.id,
         record: false,
         strategy,
         dryRun: dry,

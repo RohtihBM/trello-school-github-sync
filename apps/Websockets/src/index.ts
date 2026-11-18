@@ -127,7 +127,11 @@ async function handleJoin(socket: WebSocket, message: JoinMessage) {
     return;
   }
 
-  const board = await prisma.board.findUnique({ where: { id: boardId } });
+  const boardRow = await prisma.board.findUnique({
+    where: { id: boardId },
+    include: { repository: { select: { fullName: true } } },
+  });
+  const board = boardRow && { ...boardRow, repository: boardRow.repository?.fullName ?? null };
   if (!board) {
     socket.send(JSON.stringify({ type: "error", message: "board not found" }));
     return;

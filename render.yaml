@@ -22,8 +22,6 @@ services:
       # now, not a private-network-only port.
       - key: INTERNAL_BROADCAST_URL
         sync: false
-      - key: GITHUB_SYNC_BOARD_ID
-        sync: false
       - key: GITHUB_WEBHOOK_SECRET
         sync: false
       - key: REDIS_URL

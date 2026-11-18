@@ -80,11 +80,30 @@ model Board {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  org      Org       @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  sections Section[]
-  issues   Issue[]
+  // The GitHub repository this board's tickets are about. The Worker plans
+  // against this repository's code; null until one is linked.
+  repositoryId String?
+
+  org        Org         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  repository Repository? @relation(fields: [repositoryId], references: [id], onDelete: SetNull)
+  sections   Section[]
+  issues     Issue[]
 
   @@index([orgId])
+  @@index([repositoryId])
+}
+
+// A GitHub repository some board plans against. Its code is cloned and indexed
+// per repository, and every stored vector is scoped to one, so repositories
+// never see or delete each other's data.
+model Repository {
+  id         String   @id @default(cuid())
+  fullName   String   @unique // "owner/name" as on GitHub
+  cloneUrl   String
+  createdAt  DateTime @default(now())
+
+  boards     Board[]
+  embeddings CodeChunkEmbedding[]
 }
 
 model Section {
@@ -292,7 +311,7 @@ model AiRunMetric {
   @@index([issueId])
 }
 
-// One row per code chunk the retrieval search can find. The key is a hash of
+// One row per code chunk of one repository that the retrieval search can find. The key is the repository plus a hash of
 // the embedding model's name plus the chunk's path and text, so unchanged code
 // is never embedded twice and a chunk that moved lines still matches. `model`
 // is stored so vectors from different models are never compared. The chunk's
@@ -300,10 +319,14 @@ model AiRunMetric {
 // Prisma cannot read or write the vector column through its typed client, so
 // apps/Worker/src/vectorStore.ts uses raw SQL for this table.
 model CodeChunkEmbedding {
-  hash      String   @id
-  model     String
-  embedding Unsupported("vector(384)")
-  createdAt DateTime @default(now())
+  repositoryId String
+  hash         String
+  model        String
+  embedding    Unsupported("vector(384)")
+  createdAt    DateTime @default(now())
 
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@id([repositoryId, hash])
   @@index([model])
 }

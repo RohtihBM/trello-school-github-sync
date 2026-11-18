@@ -59,13 +59,17 @@ export interface EmbedReport {
   embeddedNow: number;
 }
 
-// Makes sure every chunk has a vector in Postgres. With allowEmbedding false
+// Makes sure every chunk of this repository has a vector in Postgres. With allowEmbedding false
 // (a small server) it only reports what is missing and never loads the model.
-export async function ensureEmbedded(chunks: Chunk[], allowEmbedding: boolean): Promise<EmbedReport> {
+export async function ensureEmbedded(
+  repositoryId: string,
+  chunks: Chunk[],
+  allowEmbedding: boolean,
+): Promise<EmbedReport> {
   const byHash = new Map<string, Chunk>();
   for (const c of chunks) byHash.set(chunkHash(c), c);
 
-  const have = await existingHashes([...byHash.keys()], EMBEDDING_MODEL);
+  const have = await existingHashes(repositoryId, [...byHash.keys()], EMBEDDING_MODEL);
   const missing = [...byHash.entries()].filter(([hash]) => !have.has(hash));
 
   let embeddedNow = 0;
@@ -75,6 +79,7 @@ export async function ensureEmbedded(chunks: Chunk[], allowEmbedding: boolean): 
       const group = missing.slice(i, i + GROUP);
       const vectors = await embedTexts(group.map(([, c]) => chunkText(c)), "passage");
       await saveVectors(
+        repositoryId,
         EMBEDDING_MODEL,
         group.map(([hash], j) => ({ hash, vector: vectors[j] ?? [] })).filter((r) => r.vector.length > 0),
       );
@@ -99,12 +104,23 @@ export async function embedQuery(text: string): Promise<number[]> {
 // Chunk keys ranked by similarity to the ticket, best first, using pgvector
 // inside Postgres. Chunks with no stored vector simply do not appear, so the
 // caller's keyword ranking still covers them.
-export async function vectorRanking(queryText: string, chunks: Chunk[], topK = 80): Promise<string[]> {
+export async function vectorRanking(
+  repositoryId: string,
+  queryText: string,
+  chunks: Chunk[],
+  topK = 80,
+): Promise<string[]> {
   const keysByHash = new Map<string, string[]>();
   for (const c of chunks) {
     const h = chunkHash(c);
     keysByHash.set(h, [...(keysByHash.get(h) ?? []), c.key]);
   }
-  const best = await searchSimilar(await embedQuery(queryText), [...keysByHash.keys()], EMBEDDING_MODEL, topK);
+  const best = await searchSimilar(
+    repositoryId,
+    await embedQuery(queryText),
+    [...keysByHash.keys()],
+    EMBEDDING_MODEL,
+    topK,
+  );
   return best.flatMap((h) => keysByHash.get(h) ?? []);
 }

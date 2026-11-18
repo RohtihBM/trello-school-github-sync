@@ -9,6 +9,8 @@ import {
   type Chunk,
 } from "../chunks.js";
 import { ensureEmbedded, vectorRanking } from "../embeddings.js";
+import { DEFAULT_REPO, findOrCreateRepository } from "../repositories.js";
+import { ensureRepoCloned } from "../repoClone.js";
 import {
   loadSourceFiles,
   rankFiles,
@@ -35,6 +37,7 @@ interface Selected {
   tokens: number;
 }
 interface Context {
+  repositoryId: string;
   files: SourceFile[];
   chunks: Chunk[];
 }
@@ -52,13 +55,13 @@ const strategies: Record<string, Strategy> = {
       tokens: c.tokens,
     })),
   "chunk vector": async (ctx, text, budget) => {
-    const ranking = await vectorRanking(text, ctx.chunks);
+    const ranking = await vectorRanking(ctx.repositoryId, text, ctx.chunks);
     const scores = new Map(ranking.map((k, i) => [k, 1 / (i + 1)]));
     return selectChunks(ctx.chunks, scores, budget).map((c) => ({ path: c.path, tokens: c.tokens }));
   },
   "chunk hybrid": async (ctx, text, budget) => {
     const keyword = rankingFromScores(rankChunks(ctx.chunks, ctx.files, text));
-    const vector = await vectorRanking(text, ctx.chunks);
+    const vector = await vectorRanking(ctx.repositoryId, text, ctx.chunks);
     const fused = fuseRankings([keyword, vector]);
     return selectChunks(ctx.chunks, fused, budget).map((c) => ({ path: c.path, tokens: c.tokens }));
   },
@@ -69,7 +72,8 @@ export function registerStrategy(name: string, strategy: Strategy) {
 }
 
 async function main() {
-  const repoPath = process.env.REPO_PATH ?? path.resolve(process.cwd(), ".repo-cache/trello-school-github-sync");
+  const repository = await findOrCreateRepository(process.env.REPO ?? DEFAULT_REPO);
+  const repoPath = process.env.REPO_PATH ?? (await ensureRepoCloned(repository));
   const tickets: EvalTicket[] = JSON.parse(
     readFileSync(path.resolve(process.cwd(), "../../docs/eval/retrieval-tickets.json"), "utf8"),
   ).tickets;
@@ -78,8 +82,8 @@ async function main() {
   const known = new Set(files.map((f) => f.path));
   const chunks = chunkFiles(files);
   const started = Date.now();
-  const report = await ensureEmbedded(chunks, true);
-  const ctx: Context = { files, chunks };
+  const report = await ensureEmbedded(repository.id, chunks, true);
+  const ctx: Context = { repositoryId: repository.id, files, chunks };
   console.log(
     `repo: ${files.length} files, ${chunks.length} chunks (${report.uniqueChunks} unique), ${tickets.length} tickets; already in Postgres: ${report.alreadyStored}, embedded now: ${report.embeddedNow} in ${((Date.now() - started) / 1000).toFixed(1)}s\n`,
   );

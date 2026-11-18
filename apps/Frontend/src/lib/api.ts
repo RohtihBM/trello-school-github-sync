@@ -45,6 +45,8 @@ export interface Board {
   id: string;
   title: string;
   description: string | null;
+  // "owner/name" of the GitHub repository this board plans against.
+  repository: string | null;
   orgId: string;
   createdAt: string;
   updatedAt: string;

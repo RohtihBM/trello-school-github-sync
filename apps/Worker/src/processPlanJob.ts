@@ -1,7 +1,7 @@
 import { query, type Options } from "@anthropic-ai/claude-agent-sdk";
 import { Prisma, prisma } from "@repo/db";
 import { ensureRepoCloned } from "./repoClone.js";
-import { buildMap, chooseTier, formatSource, loadSourceFiles } from "./repoContext.js";
+import { buildMap, formatSource, loadSourceFiles } from "./repoContext.js";
 import {
   chunkFiles,
   chunksForRequestedFiles,
@@ -126,30 +126,28 @@ interface RunContext {
   record?: boolean;
 }
 
-// How a plan gets its view of the repository (docs/context-engineering-plan.md):
-//   agentic   - the agent explores with Read/Grep/Glob, ~25 requests. The
-//               DEFAULT, so nothing changes unless CONTEXT_STRATEGY is set.
-//   full      - all source in one request, no tools. Cheapest while the whole
-//               source fits the model's context window, then it stops working.
-//   retrieval - a map of every file plus only the code chunks most relevant
-//               to the ticket, within a fixed token budget, in one request
-//               (no tools). Cost stays flat as the repository grows. The model
-//               may ask ONCE for specific extra files, so at most two requests.
-//   auto      - "full" while all the source fits FULL_MAX_TOKENS, otherwise
-//               "retrieval".
-export type ConfiguredStrategy = "agentic" | "full" | "retrieval" | "auto";
-const CONTEXT_STRATEGY: ConfiguredStrategy = (["full", "retrieval", "auto"] as const).includes(
-  process.env.CONTEXT_STRATEGY as "full" | "retrieval" | "auto",
-)
-  ? (process.env.CONTEXT_STRATEGY as ConfiguredStrategy)
-  : "agentic";
+// How a plan gets its view of the repository (docs/context-engineering-plan.md).
+// Every repository, however small or large, goes through the SAME pipeline by
+// default: retrieval, which chunks the code, ranks the chunks against the
+// ticket (keyword plus stored embeddings) and sends a map of every file plus
+// the best chunks within a fixed token budget in one request. The model may
+// ask ONCE for specific extra files, so at most two requests.
+//   retrieval - the default, and the only strategy that scales with the repo.
+//   full      - all source in one request. For experiments and comparisons.
+//   agentic   - the agent explores with Read/Grep/Glob, ~25 requests. For
+//               experiments and comparisons.
+// There is deliberately no mode that picks a strategy by repository size.
+export type ConfiguredStrategy = "agentic" | "full" | "retrieval";
+const CONTEXT_STRATEGY: ConfiguredStrategy =
+  process.env.CONTEXT_STRATEGY === "agentic" || process.env.CONTEXT_STRATEGY === "full"
+    ? process.env.CONTEXT_STRATEGY
+    : "retrieval";
 
 const intFromEnv = (name: string, fallback: number) => {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 };
 // Token figures are conservative estimates (see estimateTokens in repoContext).
-const FULL_MAX_TOKENS = intFromEnv("FULL_MAX_TOKENS", 120_000);
 const RETRIEVAL_SOURCE_TOKENS = intFromEnv("RETRIEVAL_SOURCE_TOKENS", 40_000);
 const RETRIEVAL_EXTRA_TOKENS = intFromEnv("RETRIEVAL_EXTRA_TOKENS", 20_000);
 const MAP_MAX_TOKENS = intFromEnv("MAP_MAX_TOKENS", 12_000);
@@ -339,6 +337,8 @@ export interface PlanInput {
   title: string;
   description: string | null;
   repoPath: string;
+  // The repository the code belongs to: stored vectors are scoped to it.
+  repositoryId: string;
   issueId?: string;
   jobId?: string;
   // Offline evaluation passes false so no metric rows are written.
@@ -412,8 +412,7 @@ export async function generatePlan(input: PlanInput): Promise<PlanResult> {
   const configured = input.strategy ?? CONTEXT_STRATEGY;
 
   const files = configured === "agentic" ? null : await loadSourceFiles(repoPath);
-  const strategy: "agentic" | "full" | "retrieval" =
-    configured === "auto" ? (chooseTier(files ?? [], FULL_MAX_TOKENS) === "full" ? "full" : "retrieval") : configured;
+  const strategy: "agentic" | "full" | "retrieval" = configured;
 
   const totals = { requests: 0, turns: 0, costUsd: 0, durationMs: 0 };
   const run = async (prompt: string, options: Partial<Options>) => {
@@ -475,11 +474,11 @@ export async function generatePlan(input: PlanInput): Promise<PlanResult> {
       // Vectors live in Postgres (pgvector). A machine allowed to embed fills
       // in any that are missing; a small server (EMBED_MISSING=false) only
       // reads what the indexer already stored.
-      const report = await ensureEmbedded(chunks, ALLOW_EMBEDDING);
+      const report = await ensureEmbedded(input.repositoryId, chunks, ALLOW_EMBEDDING);
       if (report.missing > report.embeddedNow) {
         console.warn(`${report.missing - report.embeddedNow} chunks have no stored vector yet; keyword ranking covers them`);
       }
-      const vector = await vectorRanking(ticketText, chunks);
+      const vector = await vectorRanking(input.repositoryId, ticketText, chunks);
       scores = fuseRankings([rankingFromScores(scores), vector]);
     } catch (err) {
       console.error("embedding retrieval unavailable, using keyword only:", err);
@@ -527,6 +526,21 @@ export async function generatePlan(input: PlanInput): Promise<PlanResult> {
   return finish(second.text, second.sessionId, secondPrompt, shown);
 }
 
+// The repository a ticket's board is linked to. A board with no repository has
+// no code to plan against, which is a configuration problem to surface, not
+// something to quietly guess around.
+async function repositoryForIssue(issueId: string) {
+  const issue = await prisma.issue.findUniqueOrThrow({
+    where: { id: issueId },
+    include: { board: { include: { repository: true } } },
+  });
+  const repository = issue.board.repository;
+  if (!repository) {
+    throw new Error(`board "${issue.board.title}" is not linked to a repository yet`);
+  }
+  return repository;
+}
+
 export async function processPlanJob(jobId: string): Promise<void> {
   const job = await prisma.planGenerationJob.findUniqueOrThrow({
     where: { id: jobId },
@@ -538,12 +552,14 @@ export async function processPlanJob(jobId: string): Promise<void> {
     data: { status: "RUNNING", attempts: { increment: 1 } },
   });
 
-  const repoPath = await ensureRepoCloned();
+  const repository = await repositoryForIssue(job.issueId);
+  const repoPath = await ensureRepoCloned(repository);
 
   const result = await generatePlan({
     title: job.issue.title,
     description: job.issue.description,
     repoPath,
+    repositoryId: repository.id,
     issueId: job.issueId,
     jobId,
   });
@@ -585,7 +601,7 @@ export async function processChatMessage(jobId: string, message: string): Promis
     data: { status: "RUNNING", attempts: { increment: 1 } },
   });
 
-  const repoPath = await ensureRepoCloned();
+  const repoPath = await ensureRepoCloned(await repositoryForIssue(job.issueId));
 
   // Every chat turn carries this instruction, not just the first — a
   // resumed session only remembers what Claude itself said before, never

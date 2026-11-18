@@ -10,20 +10,25 @@ function toVectorLiteral(vector: number[]): string {
 }
 
 // Which of these fingerprints already have a stored vector for this model?
-export async function existingHashes(hashes: string[], model: string): Promise<Set<string>> {
+export async function existingHashes(
+  repositoryId: string,
+  hashes: string[],
+  model: string,
+): Promise<Set<string>> {
   const found = new Set<string>();
   const BATCH = 2000;
   for (let i = 0; i < hashes.length; i += BATCH) {
     const slice = hashes.slice(i, i + BATCH);
     const rows = await prisma.$queryRaw<Array<{ hash: string }>>`
       SELECT hash FROM "CodeChunkEmbedding"
-      WHERE model = ${model} AND hash = ANY(${slice}::text[])`;
+      WHERE "repositoryId" = ${repositoryId} AND model = ${model} AND hash = ANY(${slice}::text[])`;
     for (const r of rows) found.add(r.hash);
   }
   return found;
 }
 
 export async function saveVectors(
+  repositoryId: string,
   model: string,
   rows: Array<{ hash: string; vector: number[] }>,
 ): Promise<void> {
@@ -31,12 +36,12 @@ export async function saveVectors(
   for (let i = 0; i < rows.length; i += BATCH) {
     const values = rows
       .slice(i, i + BATCH)
-      .map((r) => Prisma.sql`(${r.hash}, ${model}, ${toVectorLiteral(r.vector)}::vector)`);
-    // A fingerprint already stored for the same text is simply left alone.
+      .map((r) => Prisma.sql`(${repositoryId}, ${r.hash}, ${model}, ${toVectorLiteral(r.vector)}::vector)`);
+    // A fingerprint already stored for this repository is simply left alone.
     await prisma.$executeRaw`
-      INSERT INTO "CodeChunkEmbedding" (hash, model, embedding)
+      INSERT INTO "CodeChunkEmbedding" ("repositoryId", hash, model, embedding)
       VALUES ${Prisma.join(values)}
-      ON CONFLICT (hash) DO NOTHING`;
+      ON CONFLICT ("repositoryId", hash) DO NOTHING`;
   }
 }
 
@@ -45,6 +50,7 @@ export async function saveVectors(
 // against every row, which is instant; an ANN index only matters at tens of
 // thousands of chunks.
 export async function searchSimilar(
+  repositoryId: string,
   queryVector: number[],
   hashes: string[],
   model: string,
@@ -53,22 +59,29 @@ export async function searchSimilar(
   const literal = toVectorLiteral(queryVector);
   const rows = await prisma.$queryRaw<Array<{ hash: string }>>`
     SELECT hash FROM "CodeChunkEmbedding"
-    WHERE model = ${model} AND hash = ANY(${hashes}::text[])
+    WHERE "repositoryId" = ${repositoryId} AND model = ${model} AND hash = ANY(${hashes}::text[])
     ORDER BY embedding <=> ${literal}::vector
     LIMIT ${topK}`;
   return rows.map((r) => r.hash);
 }
 
-// Drops stored vectors for this model that no chunk in the current checkout
-// refers to any more, so the table does not grow with every edit.
-export async function pruneVectors(model: string, keepHashes: string[]): Promise<number> {
+// Drops stored vectors of ONE repository that no chunk in its current checkout
+// refers to any more, so the table does not grow with every edit. Scoped by
+// repository on purpose: pruning one repository must never touch another's.
+export async function pruneVectors(
+  repositoryId: string,
+  model: string,
+  keepHashes: string[],
+): Promise<number> {
   return prisma.$executeRaw`
     DELETE FROM "CodeChunkEmbedding"
-    WHERE model = ${model} AND NOT (hash = ANY(${keepHashes}::text[]))`;
+    WHERE "repositoryId" = ${repositoryId} AND model = ${model}
+      AND NOT (hash = ANY(${keepHashes}::text[]))`;
 }
 
-export async function countVectors(model: string): Promise<number> {
+export async function countVectors(repositoryId: string, model: string): Promise<number> {
   const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
-    SELECT count(*) AS n FROM "CodeChunkEmbedding" WHERE model = ${model}`;
+    SELECT count(*) AS n FROM "CodeChunkEmbedding"
+    WHERE "repositoryId" = ${repositoryId} AND model = ${model}`;
   return Number(rows[0]?.n ?? 0);
 }
