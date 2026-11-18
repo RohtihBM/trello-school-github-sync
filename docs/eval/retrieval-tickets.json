@@ -1,0 +1,76 @@
+{
+  "_note": "Evaluation set for comparing ways of choosing which source files to show Claude for a ticket. The files listed under 'files' are the ones a change for that ticket would touch. They were labelled by Claude from reading the code (not by a human who made the change), so treat them as a reasonable answer key, not ground truth, and fix any you disagree with. Ticket text deliberately avoids file and function names, like real tickets do.",
+  "tickets": [
+    {
+      "id": "limit-env",
+      "title": "Make the daily Claude call limit configurable per environment",
+      "description": "The cap on how many AI plan and chat calls a person can make per day is fixed in the code. A public demo needs a much lower cap than local development. Read the limit from configuration, keep the current value as the default, and make the error shown when someone hits the cap say what the limit is.\n\nAcceptance criteria:\n- The limit can be changed without editing code.\n- With no configuration the behaviour is unchanged.\n- The message returned when the cap is reached includes the number.",
+      "files": ["apps/Backend/src/lib/rateLimit.ts", "apps/Backend/src/routes/plan.ts"]
+    },
+    {
+      "id": "ws-reconnect",
+      "title": "Recover automatically when the live connection to a board drops",
+      "description": "When the network blips, or the hosting service restarts, a board silently stops updating and the user has to refresh the page to see changes again. The page should notice the drop, try to reconnect with increasing delays, re-enter the board and refresh what it shows, and tell the user while it is reconnecting.\n\nAcceptance criteria:\n- After a dropped connection the board resumes live updates without a page refresh.\n- Retries back off instead of hammering the server.\n- A small indicator shows while the page is offline.",
+      "files": ["apps/Frontend/src/pages/BoardView.tsx"]
+    },
+    {
+      "id": "multi-tab",
+      "title": "Let one person keep the same board open in several tabs",
+      "description": "If someone opens a board in a second browser tab, the first tab stops receiving updates, and closing either tab makes the person look offline to everyone else. Each tab should keep receiving live updates, and a person should only appear as gone once all of their tabs are closed.\n\nAcceptance criteria:\n- Two tabs for the same user both receive updates.\n- Closing one tab does not mark the user as having left.\n- The presence list still shows each person once.",
+      "files": ["apps/Websockets/src/rooms.ts", "apps/Websockets/src/index.ts"]
+    },
+    {
+      "id": "remove-dependency",
+      "title": "Allow removing a declared ticket dependency",
+      "description": "There is no way to take back a dependency once it has been declared; it is permanent short of editing the database. Add a remove control next to each entry in the ticket's dependency list. Removing one that leaves a ticket with no open blockers should update the ticket's status the same way a finished blocker does.\n\nAcceptance criteria:\n- Each dependency in the list has a remove control.\n- Removing it updates every open view of the board live.\n- The same organisation-membership rules apply as for adding one.",
+      "files": [
+        "apps/Backend/src/routes/dependency.ts",
+        "apps/Frontend/src/components/TicketDetailsPane.tsx",
+        "apps/Frontend/src/components/IssueDetailContent.tsx",
+        "apps/Frontend/src/pages/BoardView.tsx"
+      ]
+    },
+    {
+      "id": "signin-throttle",
+      "title": "Slow down repeated failed sign-in attempts",
+      "description": "Nothing stops someone from trying thousands of passwords against an account. After several failed sign-ins for the same email within a short window, further attempts should be rejected for a while, with a message that says to try again later. A successful sign-in should not be affected by earlier failures from other people.\n\nAcceptance criteria:\n- Repeated failures for one email are temporarily blocked.\n- The block expires on its own.\n- Normal sign-ins are unaffected.",
+      "files": ["apps/Backend/src/routes/auth.ts", "apps/Backend/src/lib/rateLimit.ts"]
+    },
+    {
+      "id": "webhook-dedupe",
+      "title": "Ignore a repeated delivery of the same GitHub event",
+      "description": "GitHub sometimes sends the same event more than once, for example when a delivery times out and is retried. Processing the same ticket event twice should not cause duplicate work. Remember which deliveries have already been handled for a day, and quietly acknowledge repeats.\n\nAcceptance criteria:\n- A repeated delivery returns success without re-processing it.\n- The memory of handled deliveries expires on its own.\n- Distinct events are still processed.",
+      "files": ["apps/Backend/src/routes/github.ts", "apps/Backend/src/lib/redis.ts"]
+    },
+    {
+      "id": "queue-position",
+      "title": "Show how many plan jobs are ahead of mine while I wait",
+      "description": "After clicking generate, people only see a spinner and cannot tell whether anything is happening. Show where their request is in line and whether it is waiting or running, and update it as the line moves.\n\nAcceptance criteria:\n- A waiting request shows how many are ahead of it.\n- The display changes when the job starts running.\n- Nothing extra is shown once the plan is ready.",
+      "files": [
+        "apps/Backend/src/routes/plan.ts",
+        "apps/Backend/src/lib/queue.ts",
+        "apps/Frontend/src/components/ChatPane.tsx",
+        "apps/Frontend/src/pages/BoardView.tsx",
+        "apps/Frontend/src/lib/api.ts"
+      ]
+    },
+    {
+      "id": "delete-board",
+      "title": "Let a board's owner delete a board they no longer need",
+      "description": "Boards can be created and renamed but never removed, so old test boards pile up in the list forever. Add a delete action on the boards page, with a confirmation, that removes the board and everything on it. Only members of the organisation that owns the board may do it.\n\nAcceptance criteria:\n- A delete action with a confirmation appears for each board.\n- The board disappears from the list afterwards.\n- People outside the organisation cannot delete it.",
+      "files": ["apps/Backend/src/routes/board.ts", "apps/Frontend/src/pages/BoardsList.tsx"]
+    },
+    {
+      "id": "clone-cache",
+      "title": "Stop downloading the whole repository again for every plan",
+      "description": "Every plan request refreshes its copy of the project's source before reading it, even when nothing has changed since the last request, and a brand new server downloads the full history. Only fetch when the remote has something new, and fetch as little history as possible the first time.\n\nAcceptance criteria:\n- Requests with no upstream change do no network download.\n- The first download is shallow.\n- Plans still see the latest source after a new commit.",
+      "files": ["apps/Worker/src/repoClone.ts"]
+    },
+    {
+      "id": "move-message",
+      "title": "Explain exactly why a card cannot be moved to Completed",
+      "description": "When someone drags a ticket into the Completed column and it is refused, the card jumps back with a generic message. The message should say which condition failed and name the other ticket that is still blocking it, if that is the reason, so people know what to do next.\n\nAcceptance criteria:\n- A refusal due to a missing approval says that.\n- A refusal due to an unfinished blocker names that blocker.\n- The card still returns to its original column.",
+      "files": ["apps/Websockets/src/handlers.ts", "apps/Frontend/src/pages/BoardView.tsx"]
+    }
+  ]
+}

@@ -55,6 +55,27 @@ Second samples on the same ticket, after the cleanup that produced the final cod
 - **Chat resumes its session** (unchanged), and each prompt now also restates the current plan, since an accepted revision lives in the database and not in the session. Verified working: a chat reply came back normally.
 - **`full` only works while all the source fits the model's context window**, which is roughly 100K tokens for this repo today (conservative count). The window is 200K, so there is not a lot of headroom.
 
+## Bounded retrieval, end to end (branch `feature/bounded-retrieval`, 2026-11-18)
+
+A single-request mode: a map of every file (about 2K tokens) plus the chunks most relevant to the ticket within a fixed 40K-token budget (keyword plus local-embedding ranking), no tools, prompt caching off. The model may ask once for named extra files, so at most two requests; it never needed to in these runs. Compared with `full` on 4 labelled tickets (`docs/eval/retrieval-tickets.json`), one run per ticket and strategy, using `src/scripts/evalPlans.ts`:
+
+| Per plan, average of 4 | `full` | `retrieval` |
+|---|---|---|
+| Prompt size (conservative token estimate) | about 107K | **about 44K** (and flat as the repo grows) |
+| Cost | $0.145 | **$0.065 (-55%)** |
+| Time | 24 s | 45 s (slower, cause unknown) |
+| Plan file list matches answer key (strict) | 40%, **65% after the parser fix below** | **90%** |
+| Answer-key files mentioned anywhere in the plan | 90% | 95% |
+| Requests | 1 | 1 |
+
+Total spend for the eight plans: $0.84.
+
+- **Plan quality was at least as good** by both measures, with the caveats below.
+- **A parser bug was found by this run and fixed:** a model reply that wrapped the closing `INTENDED_FILES` line in a Markdown code fence lost a correct four-file list and leaked the raw marker into the plan. The parser now accepts fenced markers (verified against the real failing sample). This bug also exists on `main`.
+- **One `full` plan was cut off mid-sentence** (cause unknown); the strict `full` score cannot recover that one.
+- **Caveats:** 4 tickets, 1 run each; the answer key was labelled by me; retrieval ran with the local embedding model (about 1 GB of memory while indexing), which Render's free tier cannot hold. The keyword-only mode, which can run there, has not been run end to end.
+- **Unexplained:** retrieval was slower per plan despite a smaller prompt.
+
 ### Retrieval experiment (branch `experiment/context-retrieval`, not on main)
 
 Chunking, a local embedding model, rank fusion and a "map plus selected code" mode, measured offline on 10 tickets labelled by hand (`docs/eval/retrieval-tickets.json` on that branch; the labels are my own judgement and should be reviewed):
