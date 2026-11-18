@@ -321,7 +321,9 @@ export function BoardView() {
       const now = Date.now();
       const stale = [...pendingSinceRef.current.values()].some((t) => now - t > 45_000);
       if (!stale) return;
-      for (const id of pendingSinceRef.current.keys()) pendingSinceRef.current.set(id, now);
+      // Back-dated so a still-running job is re-checked every 15s from here on,
+      // not every 45s: the plan may land a moment after this resync.
+      for (const id of pendingSinceRef.current.keys()) pendingSinceRef.current.set(id, now - 30_000);
       forceReconnectRef.current?.();
     }, 15_000);
     return () => clearInterval(timer);
