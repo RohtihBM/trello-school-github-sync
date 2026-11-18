@@ -89,6 +89,11 @@ export function BoardView() {
   const [syncing, setSyncing] = useState(false);
   const [savingBoardEdit, setSavingBoardEdit] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  // Bookkeeping for tickets waiting on a live "plan-ready"/chat reply, so a
+  // broadcast this tab missed cannot leave them stuck on "Generating...".
+  const forceReconnectRef = useRef<(() => void) | null>(null);
+  const pendingSinceRef = useRef<Map<string, number>>(new Map());
+  const baselineRef = useRef<Map<string, { plan: string | null; messages: number }>>(new Map());
 
   // A drag only activates after 8px of real movement — without this, a
   // plain click anywhere on the handle would register as a (zero-distance)
@@ -100,7 +105,18 @@ export function BoardView() {
     socketRef.current?.send(JSON.stringify(message));
   }
 
+  // Marks a ticket as waiting, remembering what it looked like at that moment
+  // so a later board-state can tell whether the awaited result already landed.
+  function markPending(issueId: string) {
+    const issue = sections.flatMap((s) => s.issues).find((i) => i.id === issueId);
+    pendingSinceRef.current.set(issueId, Date.now());
+    baselineRef.current.set(issueId, { plan: issue?.plan ?? null, messages: issue?.planMessages?.length ?? 0 });
+    setPendingIssueIds((prev) => new Set(prev).add(issueId));
+  }
+
   function clearPending(issueId: string) {
+    pendingSinceRef.current.delete(issueId);
+    baselineRef.current.delete(issueId);
     setPendingIssueIds((prev) => {
       const next = new Set(prev);
       next.delete(issueId);
@@ -110,7 +126,7 @@ export function BoardView() {
 
   async function handleGeneratePlan(issueId: string) {
     setIssueErrors((prev) => ({ ...prev, [issueId]: "" }));
-    setPendingIssueIds((prev) => new Set(prev).add(issueId));
+    markPending(issueId);
     try {
       await api(`/issues/${issueId}/generate-plan`, { method: "POST" });
       // intentionally NOT cleared here — stays pending until the live
@@ -123,7 +139,7 @@ export function BoardView() {
   }
 
   async function handleSendChat(issueId: string, message: string) {
-    setPendingIssueIds((prev) => new Set(prev).add(issueId));
+    markPending(issueId);
     try {
       await api(`/issues/${issueId}/chat`, {
         method: "POST",
@@ -295,228 +311,307 @@ export function BoardView() {
       .catch((err) => errorToast("Failed to load board members", err));
   }, [boardId]);
 
+  // A live connection can go quiet without ever closing (a sleeping laptop, a
+  // background tab, a proxy dropping it). If a ticket has been waiting well
+  // past a normal plan, reconnect: the join returns the current board state.
+  const hasPending = pendingIssueIds.size > 0;
+  useEffect(() => {
+    if (!hasPending) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      const stale = [...pendingSinceRef.current.values()].some((t) => now - t > 45_000);
+      if (!stale) return;
+      for (const id of pendingSinceRef.current.keys()) pendingSinceRef.current.set(id, now);
+      forceReconnectRef.current?.();
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [hasPending]);
+
   useEffect(() => {
     if (!boardId) return;
 
-    const token = getToken();
-    const socket = new WebSocket(WS_URL);
-    socketRef.current = socket;
     let cancelled = false;
+    let attempt = 0;
+    let warned = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-    socket.onopen = () => {
-      socket.send(JSON.stringify({ type: "join", boardId, token }));
-    };
+    // Opens (or re-opens) the live connection. Every successful join makes the
+    // server send a fresh "board-state", so reconnecting also re-syncs
+    // anything that was broadcast while this tab was not listening.
+    function connect() {
+      const token = getToken();
+      const socket = new WebSocket(WS_URL);
+      socketRef.current = socket;
 
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data);
+      socket.onopen = () => {
+        attempt = 0;
+        warned = false;
+        socket.send(JSON.stringify({ type: "join", boardId, token }));
+      };
 
-      switch (message.type) {
-        case "board-state":
-          setBoard(message.board);
-          setSections(message.sections);
-          setUsers(message.users);
-          break;
-        case "user-joined":
-          setUsers((prev) => [...prev, message.user]);
-          break;
-        case "user-left":
-          setUsers((prev) => prev.filter((u) => u.userId !== message.userId));
-          break;
-        case "issue-created":
-          // A genuinely brand-new issue — prisma.issue.create() never
-          // returns relations, so planMessages is missing from this
-          // payload entirely, not just empty. mergeIssue doesn't apply
-          // here (there's no existing issue to fall back to), so default
-          // it explicitly, or PlanPanel would crash reading .map() on
-          // undefined the moment someone opens this card's panel.
-          setSections((prev) =>
-            prev.map((s) =>
-              s.id === message.issue.sectionId
-                ? {
-                    ...s,
-                    issues: [
-                      ...s.issues,
-                      { ...message.issue, planMessages: [], dependsOn: [], assignees: [] },
-                    ],
-                  }
-                : s,
-            ),
-          );
-          break;
-        case "issue-updated":
-        case "plan-ready":
-          setSections((prev) =>
-            prev.map((s) => ({
-              ...s,
-              issues: s.issues.map((i) =>
-                i.id === message.issue.id ? mergeIssue(i, message.issue) : i,
-              ),
-            })),
-          );
-          // A dependency suggestion arriving means Claude's turn for this
-          // click is over — it's waiting on a human now (confirm/dismiss
-          // in the pane), not still generating anything. Without this,
-          // "Generating..." would keep spinning on the button that no
-          // longer even renders, right through the exact moment the real
-          // next action (the suggestion banner) appears.
-          if (message.type === "issue-updated" && message.issue.suggestedDependency) {
-            clearPending(message.issue.id);
-          }
-          if (message.type === "plan-ready") {
-            clearPending(message.issue.id);
-            // A single broadcast carries enough to update BOTH sides of
-            // the overlap live, for every connected client — no second
-            // message needed: this ticket's own list comes straight from
-            // message.overlaps, and each ticket named in there gets this
-            // one added back to ITS list, since a file overlap is always
-            // symmetric.
-            const overlaps: OverlapInfo[] = message.overlaps ?? [];
-            if (overlaps.length > 0) {
-              setFileOverlaps((prev) => {
-                const next: Record<string, OverlapInfo[]> = {
-                  ...prev,
-                  [message.issue.id]: overlaps,
-                };
-                for (const other of overlaps) {
-                  const reciprocal: OverlapInfo = {
-                    id: message.issue.id,
-                    title: message.issue.title,
-                    sharedFiles: other.sharedFiles,
-                  };
-                  const existing = next[other.id] ?? [];
-                  next[other.id] = [
-                    ...existing.filter((o) => o.id !== message.issue.id),
-                    reciprocal,
-                  ];
-                }
-                return next;
-              });
+      socket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+
+        switch (message.type) {
+          case "board-state": {
+            setBoard(message.board);
+            setSections(message.sections);
+            setUsers(message.users);
+            // Fresh state from the server: anything this tab was still waiting
+            // on that has already landed (a new plan, or a new assistant reply)
+            // is no longer pending, even though its live message never arrived.
+            const fresh: Issue[] = (message.sections as Section[]).flatMap((sec) => sec.issues);
+            for (const id of [...pendingSinceRef.current.keys()]) {
+              const issue = fresh.find((i) => i.id === id);
+              const base = baselineRef.current.get(id);
+              if (!issue || !base) continue;
+              const messages = issue.planMessages ?? [];
+              const replied =
+                messages.length > base.messages && messages[messages.length - 1]?.role === "assistant";
+              if (issue.plan !== base.plan || replied) clearPending(id);
             }
+            break;
           }
-          break;
-        case "chat-message":
-          // The user's own message broadcast (sent the instant they hit
-          // Send, before Claude has replied) carries no `issue` — only
-          // the later assistant-reply broadcast does, since that's the
-          // only one that can ever change proposedPlan.
-          setSections((prev) =>
-            prev.map((s) => ({
-              ...s,
-              issues: s.issues.map((i) =>
-                i.id === message.message.issueId
+          case "user-joined":
+            setUsers((prev) => [...prev, message.user]);
+            break;
+          case "user-left":
+            setUsers((prev) => prev.filter((u) => u.userId !== message.userId));
+            break;
+          case "issue-created":
+            // A genuinely brand-new issue — prisma.issue.create() never
+            // returns relations, so planMessages is missing from this
+            // payload entirely, not just empty. mergeIssue doesn't apply
+            // here (there's no existing issue to fall back to), so default
+            // it explicitly, or PlanPanel would crash reading .map() on
+            // undefined the moment someone opens this card's panel.
+            setSections((prev) =>
+              prev.map((s) =>
+                s.id === message.issue.sectionId
                   ? {
-                      ...(message.issue ? mergeIssue(i, message.issue) : i),
-                      planMessages: [...i.planMessages, message.message],
+                      ...s,
+                      issues: [
+                        ...s.issues,
+                        { ...message.issue, planMessages: [], dependsOn: [], assignees: [] },
+                      ],
                     }
-                  : i,
+                  : s,
               ),
-            })),
-          );
-          clearPending(message.message.issueId);
-          break;
-        case "job-failed":
-          clearPending(message.issueId);
-          setIssueErrors((prev) => ({ ...prev, [message.issueId]: message.error }));
-          toast({ title: "Plan generation failed", description: message.error, variant: "destructive" });
-          break;
-        case "issue-deleted":
-          setSections((prev) =>
-            prev.map((s) => ({
-              ...s,
-              issues: s.issues.filter((i) => i.id !== message.issueId),
-            })),
-          );
-          break;
-        case "issue-moved":
-          setSections((prev) => {
-            const existing = prev
-              .flatMap((s) => s.issues)
-              .find((i) => i.id === message.issue.id);
-            const merged = existing
-              ? mergeIssue(existing, message.issue)
-              : {
-                  ...message.issue,
-                  planMessages: message.issue.planMessages ?? [],
-                  dependsOn: message.issue.dependsOn ?? [],
-                  assignees: message.issue.assignees ?? [],
-                };
-
-            return prev
-              .map((s) => ({
+            );
+            break;
+          case "issue-updated":
+          case "plan-ready":
+            setSections((prev) =>
+              prev.map((s) => ({
                 ...s,
-                issues: s.issues.filter((i) => i.id !== message.issue.id),
-              }))
-              .map((s) =>
-                s.id === merged.sectionId
-                  ? { ...s, issues: [...s.issues, merged] }
-                  : s,
-              );
-          });
-          // The success cue — timed from the move actually landing, not
-          // from the local drag ending (dropping and the server
-          // confirming the move are two different moments, connected by
-          // a WebSocket round trip, not something to fake as instant).
-          setJustMovedId(message.issue.id);
-          setTimeout(() => {
-            setJustMovedId((id) => (id === message.issue.id ? null : id));
-          }, 700);
-          break;
-        case "dependency-mismatch":
-          // Only carries the edge's keys + contracts, not a full issue —
-          // patch just the matching dependsOn entry on the blocked ticket
-          // rather than requiring every broadcast to ship a whole Issue.
-          setSections((prev) =>
-            prev.map((s) => ({
-              ...s,
-              issues: s.issues.map((i) =>
-                i.id === message.blockedId
-                  ? {
-                      ...i,
-                      dependsOn: i.dependsOn.map((d) =>
-                        d.blockerId === message.blockerId
-                          ? { ...d, actualContract: message.actualContract, mismatchFlag: true }
-                          : d,
-                      ),
-                    }
-                  : i,
-              ),
-            })),
-          );
-          break;
-        case "error":
-          toast({ title: "Something went wrong", description: message.message, variant: "destructive" });
-          break;
-        case "move-rejected":
-          // Revert the optimistic move handleDragEnd already applied —
-          // the server is telling us where the issue actually still is,
-          // since the drop itself never happened server-side. Reads the
-          // issue out of `prev` itself (the current, already-optimistic
-          // state), not the outer `allIssues` — that's a stale closure
-          // from whenever this WebSocket effect last ran, not "right now."
-          setSections((prev) => {
-            const found = prev.flatMap((s) => s.issues).find((i) => i.id === message.issueId);
-            if (!found) return prev;
-            return prev
-              .map((s) => ({ ...s, issues: s.issues.filter((i) => i.id !== message.issueId) }))
-              .map((s) =>
-                s.id === message.sectionId
-                  ? { ...s, issues: [...s.issues, { ...found, sectionId: s.id }] }
-                  : s,
-              );
-          });
-          toast({ title: "Can't move ticket", description: message.message, variant: "destructive" });
-          break;
+                issues: s.issues.map((i) =>
+                  i.id === message.issue.id ? mergeIssue(i, message.issue) : i,
+                ),
+              })),
+            );
+            // A dependency suggestion arriving means Claude's turn for this
+            // click is over — it's waiting on a human now (confirm/dismiss
+            // in the pane), not still generating anything. Without this,
+            // "Generating..." would keep spinning on the button that no
+            // longer even renders, right through the exact moment the real
+            // next action (the suggestion banner) appears.
+            if (message.type === "issue-updated" && message.issue.suggestedDependency) {
+              clearPending(message.issue.id);
+            }
+            if (message.type === "plan-ready") {
+              clearPending(message.issue.id);
+              // A single broadcast carries enough to update BOTH sides of
+              // the overlap live, for every connected client — no second
+              // message needed: this ticket's own list comes straight from
+              // message.overlaps, and each ticket named in there gets this
+              // one added back to ITS list, since a file overlap is always
+              // symmetric.
+              const overlaps: OverlapInfo[] = message.overlaps ?? [];
+              if (overlaps.length > 0) {
+                setFileOverlaps((prev) => {
+                  const next: Record<string, OverlapInfo[]> = {
+                    ...prev,
+                    [message.issue.id]: overlaps,
+                  };
+                  for (const other of overlaps) {
+                    const reciprocal: OverlapInfo = {
+                      id: message.issue.id,
+                      title: message.issue.title,
+                      sharedFiles: other.sharedFiles,
+                    };
+                    const existing = next[other.id] ?? [];
+                    next[other.id] = [
+                      ...existing.filter((o) => o.id !== message.issue.id),
+                      reciprocal,
+                    ];
+                  }
+                  return next;
+                });
+              }
+            }
+            break;
+          case "chat-message":
+            // The user's own message broadcast (sent the instant they hit
+            // Send, before Claude has replied) carries no `issue` — only
+            // the later assistant-reply broadcast does, since that's the
+            // only one that can ever change proposedPlan.
+            setSections((prev) =>
+              prev.map((s) => ({
+                ...s,
+                issues: s.issues.map((i) =>
+                  i.id === message.message.issueId
+                    ? {
+                        ...(message.issue ? mergeIssue(i, message.issue) : i),
+                        planMessages: [...i.planMessages, message.message],
+                      }
+                    : i,
+                ),
+              })),
+            );
+            clearPending(message.message.issueId);
+            break;
+          case "job-failed":
+            clearPending(message.issueId);
+            setIssueErrors((prev) => ({ ...prev, [message.issueId]: message.error }));
+            toast({ title: "Plan generation failed", description: message.error, variant: "destructive" });
+            break;
+          case "issue-deleted":
+            setSections((prev) =>
+              prev.map((s) => ({
+                ...s,
+                issues: s.issues.filter((i) => i.id !== message.issueId),
+              })),
+            );
+            break;
+          case "issue-moved":
+            setSections((prev) => {
+              const existing = prev
+                .flatMap((s) => s.issues)
+                .find((i) => i.id === message.issue.id);
+              const merged = existing
+                ? mergeIssue(existing, message.issue)
+                : {
+                    ...message.issue,
+                    planMessages: message.issue.planMessages ?? [],
+                    dependsOn: message.issue.dependsOn ?? [],
+                    assignees: message.issue.assignees ?? [],
+                  };
+
+              return prev
+                .map((s) => ({
+                  ...s,
+                  issues: s.issues.filter((i) => i.id !== message.issue.id),
+                }))
+                .map((s) =>
+                  s.id === merged.sectionId
+                    ? { ...s, issues: [...s.issues, merged] }
+                    : s,
+                );
+            });
+            // The success cue — timed from the move actually landing, not
+            // from the local drag ending (dropping and the server
+            // confirming the move are two different moments, connected by
+            // a WebSocket round trip, not something to fake as instant).
+            setJustMovedId(message.issue.id);
+            setTimeout(() => {
+              setJustMovedId((id) => (id === message.issue.id ? null : id));
+            }, 700);
+            break;
+          case "dependency-mismatch":
+            // Only carries the edge's keys + contracts, not a full issue —
+            // patch just the matching dependsOn entry on the blocked ticket
+            // rather than requiring every broadcast to ship a whole Issue.
+            setSections((prev) =>
+              prev.map((s) => ({
+                ...s,
+                issues: s.issues.map((i) =>
+                  i.id === message.blockedId
+                    ? {
+                        ...i,
+                        dependsOn: i.dependsOn.map((d) =>
+                          d.blockerId === message.blockerId
+                            ? { ...d, actualContract: message.actualContract, mismatchFlag: true }
+                            : d,
+                        ),
+                      }
+                    : i,
+                ),
+              })),
+            );
+            break;
+          case "error":
+            toast({ title: "Something went wrong", description: message.message, variant: "destructive" });
+            break;
+          case "move-rejected":
+            // Revert the optimistic move handleDragEnd already applied —
+            // the server is telling us where the issue actually still is,
+            // since the drop itself never happened server-side. Reads the
+            // issue out of `prev` itself (the current, already-optimistic
+            // state), not the outer `allIssues` — that's a stale closure
+            // from whenever this WebSocket effect last ran, not "right now."
+            setSections((prev) => {
+              const found = prev.flatMap((s) => s.issues).find((i) => i.id === message.issueId);
+              if (!found) return prev;
+              return prev
+                .map((s) => ({ ...s, issues: s.issues.filter((i) => i.id !== message.issueId) }))
+                .map((s) =>
+                  s.id === message.sectionId
+                    ? { ...s, issues: [...s.issues, { ...found, sectionId: s.id }] }
+                    : s,
+                );
+            });
+            toast({ title: "Can't move ticket", description: message.message, variant: "destructive" });
+            break;
+        }
+      };
+
+      // onerror is always followed by onclose, which is where the retry lives.
+      socket.onclose = () => {
+        if (cancelled || socketRef.current !== socket) return;
+        if (!warned) {
+          warned = true;
+          toast({ title: "Connection lost", description: "Reconnecting to the live board...", variant: "destructive" });
+        }
+        retryTimer = setTimeout(connect, Math.min(1000 * 2 ** attempt, 15000));
+        attempt += 1;
+      };
+    }
+
+    // Drops the current socket without triggering its retry path and opens a
+    // fresh one right away. Used when a connection looks alive but has gone
+    // quiet (see the pending-ticket check below) or the tab comes back.
+    forceReconnectRef.current = () => {
+      if (cancelled) return;
+      const old = socketRef.current;
+      if (old) {
+        old.onclose = null;
+        old.onmessage = null;
+        old.close();
       }
+      clearTimeout(retryTimer);
+      attempt = 0;
+      connect();
     };
 
-    socket.onerror = () => {
-      if (cancelled) return;
-      toast({ title: "Connection lost", description: "The live board connection failed.", variant: "destructive" });
-    };
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      const open = socketRef.current?.readyState === WebSocket.OPEN;
+      if (!open || pendingSinceRef.current.size > 0) forceReconnectRef.current?.();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+
+    connect();
 
     return () => {
       cancelled = true;
-      socket.close();
+      clearTimeout(retryTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+      forceReconnectRef.current = null;
+      const socket = socketRef.current;
+      if (socket) {
+        socket.onclose = null;
+        socket.close();
+      }
     };
   }, [boardId]);
 
