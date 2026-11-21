@@ -10,12 +10,22 @@ x-app: &app
     ONNXRUNTIME_NODE_INSTALL: skip
 
 services:
+  # Redis runs on the same server instead of Upstash's free tier, whose monthly
+  # bandwidth allowance BullMQ's constant polling can exhaust. Data here is
+  # transient (job queue + live-update pub/sub), so no persistence is needed.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+
   backend:
     <<: *app
     build:
       context: .
       args: { APP: Backend }
+    depends_on: [redis]
     environment:
+      REDIS_URL: redis://redis:6379
       PORT: "3001"
       INTERNAL_BROADCAST_URL: http://websockets:8081/internal/broadcast
 
@@ -24,7 +34,9 @@ services:
     build:
       context: .
       args: { APP: Websockets }
+    depends_on: [redis]
     environment:
+      REDIS_URL: redis://redis:6379
       PORT: "8081"
 
   worker:
@@ -32,7 +44,9 @@ services:
     build:
       context: .
       args: { APP: Worker }
+    depends_on: [redis]
     environment:
+      REDIS_URL: redis://redis:6379
       INTERNAL_BROADCAST_URL: http://websockets:8081/internal/broadcast
       CONTEXT_STRATEGY: retrieval
       RETRIEVAL: hybrid
